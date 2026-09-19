@@ -9,8 +9,8 @@ description: 陪着用户走完一个网申流程：每到一页先说清这页�
 
 ## 前提
 - 投递目录里有 `resume.md`（必需）、`form.md` + `limits.json`（有长文本字段时）。
-- 用户已登录并打开网申相关页面；Chrome 已开"允许 Apple 事件中的 JavaScript"。
-- 浏览器脚本在 `../campus-apply/scripts/browser/`；控件写法 `references/controls.md`，硬规矩 `references/pitfalls.md`。
+- 专用调试浏览器已启动（`chrome_cdp.py launch`），用户已在里面登录并打开网申相关页面。
+- 浏览器操作用 `../campus-apply/scripts/browser/chrome_cdp.py`（子命令见总控 skill 的"工具位置"）；控件写法 `references/controls.md`，硬规矩 `references/pitfalls.md`。
 
 ## 开始
 1. 认领标签页，建执行清单 `<投递目录>/apply-fill-执行清单_<日期>.md` 和 `fill-log.md`（`templates/fill-log.template.md`）。→ `references/claim-and-tabs.md`
@@ -21,7 +21,7 @@ description: 陪着用户走完一个网申流程：每到一页先说清这页�
 A. **看**：guard → probe → 需要时 read_page，判断这是什么页，把每个控件的类型探清楚（文本、纯下拉、可搜索下拉、日期面板、级联）。→ `references/on-site-principles.md`
 B. **说**：这页有哪些板块字段；我能填哪些、从 `resume.md`/`form.md` 哪段取；哪些必须用户做（登录、上传、验证码、下一步/提交）；要用户给值的列表逐行收集，下拉先探选项。等用户说"可以"（或"这一页直接填"）。→ `references/collect-table.md`
 C. **等**：轮到用户做的节点，说清"请你现在做 X，做完告诉我"，什么都不动；用户说完回到 A，把变化记进 `fill-log.md`。
-D. **填**：自述类长文本先贴全文给用户看；在投递目录 `stages/` 现场写这一页的脚本（按板块写成能整页重跑的幂等函数），`run_stage.sh` 跑，回读以显示值为准，每个打开的面板同一步骤内关掉；两次仍不对就停。→ `references/on-site-principles.md`、`references/control-failure.md`
+D. **填**：自述类长文本先贴全文给用户看；在投递目录 `stages/` 现场写这一页的脚本（按板块写成能整页重跑的幂等函数），`chrome_cdp.py stage` 跑，回读以显示值为准，每个打开的面板同一步骤内关掉；两次仍不对就停。→ `references/on-site-principles.md`、`references/control-failure.md`
 E. **记**：`fill-log.md` 追加这一页：探测摘要、我填了什么、用户做了什么、回读结果、异常。
 F. **下一页**：点前 guard，点后等页面稳定再回到 A。
 

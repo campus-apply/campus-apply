@@ -29,4 +29,13 @@ description: 国内校招求职全流程的入口：看工作目录状态，告�
 - 用户叫停、换话题、或新 session 接手时，先从执行清单、填写日志、待你决定文件里整理一段"当前状态"（哪些页面填了未保存、哪些等用户定、下一步是什么），再谈别的。
 
 ## 工具位置
-浏览器脚本在本 skill 的 `scripts/browser/`：`list_tabs.sh`（列出标签页给用户选）、`claim_tab.sh <窗口号> <标签号>`（认领：往页面写运行 ID，输出 ID 与 URL，之后一律 `TAB_MARK=<ID>`）、`open_tab.sh <URL>`（我们自己新开并认领第二个标签页）、`chrome_exec.sh`（按 TAB_MARK 或 TAB_MATCH 找标签页执行 JS）、`run_stage.sh`、`read_urls.sh`（按列表逐个读页面，带间隔与 guard）、`guard.js`、`probe.js`、`read_page.js`、`lib_antd3.js`。前提：macOS + Google Chrome，菜单栏 显示→开发者→勾选"允许 Apple 事件中的 JavaScript"。
+浏览器操作走本 skill 的 `scripts/browser/chrome_cdp.py`（Python 标准库，macOS / Windows 通用；命令写作 `python3 chrome_cdp.py …`，Windows 用 `python`）。它只操作一个带远程调试端口、用专用配置目录启动的 Chrome 或 Edge，和用户日常的浏览器互不影响：
+- `launch [URL]`：启动专用浏览器（已在跑就只报版本）。第一次用要请用户在里面登录招聘站。
+- `list [关键字]`：列标签页（序号、标题、URL、targetId），认领前给用户看。
+- `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后一律 `TAB_MARK=<ID>`。
+- `open <URL> [运行ID]`：自己新开并认领第二个标签页。
+- `exec <js文件>`：在认领的标签页执行 JS，输出最后一个表达式的值（字符串原样，其他打成 JSON）。
+- `stage <stage.js> [--libs …] [--max 秒]`：把库和 stage 脚本拼起来注入，轮询日志到 DONE / ERR / 超时。
+- `read-urls <列表> <输出目录> [起始行] [结束行]`：按列表逐个读页面，带间隔与 guard。
+- `screenshot <输出.png>`：把认领的标签页切到前台、只截网页内容。
+同目录的 `guard.js`（验证码 / 登录 / 弹窗检测）、`probe.js`（控件探测）、`read_page.js`（正文与同站链接）、`lib_antd3.js`（控件操作参考实现）配合使用。`list` 和 `launch` 会在 stderr 报告端口上的浏览器版本；报"无界面（Headless）浏览器"说明端口被别的工具占了，换 `CA_CDP_PORT` 或请用户关掉它。

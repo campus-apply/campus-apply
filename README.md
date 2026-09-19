@@ -1,8 +1,8 @@
 # campus-apply
 
-国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。它在你自己登录、自己打开的浏览器标签页里现场操作，不调站点接口，不替你提交。
+国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。它在你自己登录的浏览器标签页里现场操作，不调站点接口，不替你提交。
 
-Campus-recruitment application skills for Chinese job sites, usable from Claude Code, Codex and DeepSeek Harness. Everything happens inside your own logged-in browser tab; it never submits on your behalf.
+Campus-recruitment application skills for Chinese job sites, built for Claude Code; the skill package format also loads in Codex and DeepSeek Harness (see Requirements). Everything happens inside your own logged-in browser tab; it never submits on your behalf.
 
 ## 它做什么，不做什么 / What it does and does not
 
@@ -43,10 +43,11 @@ Claude Code：在 Claude Code 里执行 `/plugin marketplace add /path/to/campus
 
 - Python 3.9 以上，`pip install python-docx openpyxl`；核页数需要 poppler 的 `pdfinfo`（macOS `brew install poppler`）或 `pip install pypdf`。
 - 改简历导 PDF 需要 Microsoft Word：macOS 直接可用；Windows 再装 `pip install docx2pdf`。没有 Word 就跳过核页数。
-- 浏览器操作（筛岗、填表）目前只支持 macOS 与 Google Chrome：在 Chrome 菜单栏 显示 → 开发者 勾选"允许 Apple 事件中的 JavaScript"。Windows 上事实库、改简历、写自述都能用，筛岗和填表暂不能用。
+- 浏览器操作（筛岗、填表）通过 Chrome DevTools 协议，macOS 与 Windows 都可以：skill 会用专用配置目录启动一个带调试端口的 Chrome 或 Edge（`chrome_cdp.py launch`），和你日常的浏览器互不影响，第一次要在里面登录招聘站。也可以自己启动：macOS `open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=$HOME/campus-apply-chrome`，Windows `chrome.exe --remote-debugging-port=9222 --user-data-dir=%USERPROFILE%\campus-apply-chrome`（Edge 同参数）。这个专用配置目录存放招聘站的登录态和缓存，不在工作目录里，几百 MB，求职结束可以整个删掉。
 - Windows 安装：用 Claude Code 的 `/plugin marketplace add`，或在 Git Bash 里 `bash install.sh claude --copy`（Windows 建软链接需要管理员权限，直接复制更省事）。
+- Harness：全流程在 Claude Code 上验证；Codex 验证到"载入 skill、按总控说明列出专用浏览器标签页"这一步，DeepSeek Harness 只验证了目录格式。Codex 的沙箱默认不开网络、连不上本机调试端口，需在它的 `config.toml`（`$CODEX_HOME/config.toml`，默认 `~/.codex/config.toml`）加 `[sandbox_workspace_write]` 下的 `network_access = true`；Codex 主目录不是 `~/.codex` 时，先 `export CODEX_HOME=<主目录>` 再运行 `install.sh codex`。
 
-Browser automation (screening and form filling) currently requires macOS with Google Chrome and the "Allow JavaScript from Apple Events" switch. The fact base, resume tailoring and essay writing work on Windows as well; PDF export there needs Word plus `docx2pdf`.
+Browser automation (screening and form filling) drives Chrome or Edge over the DevTools protocol on macOS and Windows: the skill starts a separate browser profile with a debugging port (`chrome_cdp.py launch`); log in to the job site there once. That profile directory holds the job sites' login state and cache, lives outside your workspace and can be deleted when you are done. PDF export on Windows needs Word plus `docx2pdf`. The full flow is verified on Claude Code; on Codex it is verified up to loading the skills and listing the debug browser's tabs, and DeepSeek Harness is only checked for package format. Codex's sandbox needs `network_access = true` under `[sandbox_workspace_write]` in its `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) to reach the local debugging port; set `CODEX_HOME` before `install.sh codex` if your Codex home is elsewhere.
 
 ## 工作目录 / Workspace
 
