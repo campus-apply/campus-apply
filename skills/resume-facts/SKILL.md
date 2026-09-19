@@ -15,6 +15,7 @@ description: 初始化 campus-apply 工作目录、建立带来源的个人经�
 - 访谈里的推荐答案要按用户背景调（见 `references/interview.md` 开头），不照抄。
 
 ## 步骤
+0. 这台机器第一次用：按总控 skill"第一次在这台机器上用"跑 doctor，必需项齐了再往下。
 1. 看当前目录：有没有 `campus-apply.json`、已有的简历（docx/pdf）、已有的事实类文档。列给用户看，问哪份简历作为默认模板（`resume_docx`）、哪些文件当事实库。
 2. 运行初始化（脚本在本 skill 的 `scripts/`）：
    `python3 <skill目录>/scripts/init_workspace.py --dir . --facts <文件…> --resume-docx <简历.docx>`

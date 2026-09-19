@@ -6,19 +6,21 @@
   chrome_cdp.py list [关键字]           列出标签页：序号<TAB>标题<TAB>URL<TAB>targetId（给了关键字只列标题或 URL 含它的）
   chrome_cdp.py claim <序号|targetId> [运行ID]   认领：往该页 sessionStorage 写 __caClaim=<运行ID>，输出 运行ID<TAB>URL
   chrome_cdp.py open <URL> [运行ID]      新开标签页打开 URL，等加载完写入认领标记，输出 运行ID<TAB>URL
-  TAB_MARK=<运行ID> chrome_cdp.py exec <js文件>     在认领的标签页里执行 JS 文件，输出最后一个表达式的值
-  TAB_MATCH=<url片段> chrome_cdp.py exec <js文件>   按 URL 子串找第一个匹配的标签页（兜底）
-  TAB_MARK=<运行ID> chrome_cdp.py screenshot <输出.png>   把认领的标签页切到前台并截页面（只截网页内容）
-  TAB_MARK=<运行ID> chrome_cdp.py stage <stage.js> [--libs a.js b.js] [--max 秒]
+  chrome_cdp.py --mark <运行ID> exec <js文件>      在认领的标签页里执行 JS 文件，输出最后一个表达式的值
+  chrome_cdp.py --match <url片段> exec <js文件>    按 URL 子串找第一个匹配的标签页（兜底）
+  chrome_cdp.py --mark <运行ID> screenshot <输出.png>   把认领的标签页切到前台并截页面（只截网页内容）
+  chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
         出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令每 2 秒轮询日志到 DONE / ERR / 超时（默认 90 秒）。
-  TAB_MARK=<运行ID> chrome_cdp.py read-urls <列表文件> <输出目录> [起始行] [结束行]
-        列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 PACE_MIN–PACE_MAX 秒（默认 1–2，登录后的页面建议 2–4），
-        用 read_page.js 读正文存 <输出目录>/<id>.json；每 GUARD_EVERY（默认 5）个跑一次 guard.js，遇验证码/跳登录打印 STOP 并停。
+  chrome_cdp.py --mark <运行ID> read-urls <列表文件> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N]
+        列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 --pace 秒（默认 1-2，登录后的页面建议 2-4），
+        用 read_page.js 读正文存 <输出目录>/<id>.json；每 --guard-every（默认 5）个跑一次 guard.js，遇验证码/跳登录打印 STOP 并停。
         页面 URL 不含 id 或正文太短打印 MISS <id>；结束打印 done 成功数/总数。
 
-环境变量：CA_CDP_PORT 调试端口（默认 9222）；CA_CDP_TIMEOUT 单个标签页应答超时秒数（默认 10）；
-  CA_BROWSER 浏览器可执行文件路径（不设则按平台找 Chrome / Edge）；CA_CHROME_PROFILE 专用配置目录（默认 ~/campus-apply-chrome）。
+选项可以放在子命令前后任意位置：--mark、--match、--port（调试端口，默认 9222）、--pace、--guard-every。
+同义的环境变量：TAB_MARK、TAB_MATCH、CA_CDP_PORT、PACE_MIN / PACE_MAX、GUARD_EVERY；命令行选项优先。
+其他环境变量：CA_CDP_TIMEOUT 单个标签页应答超时秒数（默认 10）；CA_BROWSER 浏览器可执行文件路径（不设则按平台找 Chrome / Edge）；
+  CA_CHROME_PROFILE 专用配置目录（默认 ~/campus-apply-chrome）。
 启动后第一次要在这个专用配置里重新登录招聘站；新版 Chrome 不允许在默认配置目录上开远程调试。
 输出约定：找不到调试浏览器 ERR_NO_CDP（退出码 2）；没找到标签页 NO_MATCHING_TAB（1）；JS 抛异常 ERR_JS: …（1）。
 返回值是字符串就原样打印，其他类型打成 JSON。
@@ -510,7 +512,31 @@ def cmd_launch(url=None):
     return 1
 
 
+OPTIONS = {'--mark': 'TAB_MARK', '--match': 'TAB_MATCH', '--port': 'CA_CDP_PORT', '--guard-every': 'GUARD_EVERY'}
+
+
+def take_options(argv):
+    """把 --mark/--match/--port/--pace/--guard-every 从任意位置摘出来写进环境变量，返回剩下的参数。"""
+    global PORT
+    rest, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a in OPTIONS and i + 1 < len(argv):
+            os.environ[OPTIONS[a]] = argv[i + 1]
+            i += 2
+        elif a == '--pace' and i + 1 < len(argv):
+            lo, _, hi = argv[i + 1].partition('-')
+            os.environ['PACE_MIN'], os.environ['PACE_MAX'] = lo, hi or lo
+            i += 2
+        else:
+            rest.append(a)
+            i += 1
+    PORT = int(os.environ.get('CA_CDP_PORT', PORT))
+    return rest
+
+
 def main(argv):
+    argv = take_options(argv)
     if not argv:
         print(__doc__)
         return 2

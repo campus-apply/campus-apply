@@ -28,14 +28,19 @@ description: 国内校招求职全流程的入口：看工作目录状态，告�
 - 内部产物名、任务编号、文件路径只进日志，不进对用户说的话，除非用户要看文件。
 - 用户叫停、换话题、或新 session 接手时，先从执行清单、填写日志、待你决定文件里整理一段"当前状态"（哪些页面填了未保存、哪些等用户定、下一步是什么），再谈别的。
 
+## 第一次在这台机器上用
+- 先探 Python：`python3 --version`（Windows `python --version`）。没有或低于 3.9，把安装命令给用户（Windows `winget install Python.Python.3.12`，macOS `brew install python`，或 python.org），等用户装完再继续；Python 都没有，后面的检查脚本跑不了。
+- 有 Python 就跑 `python3 <本skill>/scripts/doctor.py`，每行是"状态、项目、说明、修复命令"。缺 pip 包：问一句"缺 X、Y，我现在装？"，用户同意就 `doctor.py --install`（只装缺的），装完把结果给用户看。缺浏览器、Git：把那一行的命令原样给用户，等用户装完说一声再重跑 doctor。Word 是可选项，没有就照常走，改简历时说明"未核页数"。
+- 全部必需项 OK 之后才进 resume-facts；同一台机器之后不用再跑，除非报错像是缺依赖。
+
 ## 工具位置
-浏览器操作走本 skill 的 `scripts/browser/chrome_cdp.py`（Python 标准库，macOS / Windows 通用；命令写作 `python3 chrome_cdp.py …`，Windows 用 `python`）。它只操作一个带远程调试端口、用专用配置目录启动的 Chrome 或 Edge，和用户日常的浏览器互不影响：
+浏览器操作走本 skill 的 `scripts/browser/chrome_cdp.py`（Python 标准库，macOS / Windows 通用；命令写作 `python3 chrome_cdp.py …`，Windows 用 `python`；选项都是命令行参数，Bash 和 PowerShell 里写法一样）。它只操作一个带远程调试端口、用专用配置目录启动的 Chrome 或 Edge，和用户日常的浏览器互不影响：
 - `launch [URL]`：启动专用浏览器（已在跑就只报版本）。第一次用要请用户在里面登录招聘站。
 - `list [关键字]`：列标签页（序号、标题、URL、targetId），认领前给用户看。
-- `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后一律 `TAB_MARK=<ID>`。
+- `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后每条命令都带 `--mark <ID>`。
 - `open <URL> [运行ID]`：自己新开并认领第二个标签页。
 - `exec <js文件>`：在认领的标签页执行 JS，输出最后一个表达式的值（字符串原样，其他打成 JSON）。
 - `stage <stage.js> [--libs …] [--max 秒]`：把库和 stage 脚本拼起来注入，轮询日志到 DONE / ERR / 超时。
-- `read-urls <列表> <输出目录> [起始行] [结束行]`：按列表逐个读页面，带间隔与 guard。
+- `read-urls <列表> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N]`：按列表逐个读页面，带间隔与 guard。
 - `screenshot <输出.png>`：把认领的标签页切到前台、只截网页内容。
 同目录的 `guard.js`（验证码 / 登录 / 弹窗检测）、`probe.js`（控件探测）、`read_page.js`（正文与同站链接）、`lib_antd3.js`（控件操作参考实现）配合使用。`list` 和 `launch` 会在 stderr 报告端口上的浏览器版本；报"无界面（Headless）浏览器"说明端口被别的工具占了，换 `CA_CDP_PORT` 或请用户关掉它。

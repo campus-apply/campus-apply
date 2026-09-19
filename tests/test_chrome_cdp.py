@@ -309,3 +309,33 @@ def test_launch_refuses_port_held_by_headless_browser(cdp):
     cdp.ua = 'Mozilla/5.0 HeadlessChrome/999.0 Safari/537.36'
     r = run(cdp.port, 'launch', env={'CA_BROWSER': '/nonexistent/chrome'})
     assert r.returncode == 1 and r.stdout.startswith('ERR_PORT_IN_USE') and 'Headless' in r.stdout
+
+
+def test_mark_flag_selects_tab_without_env(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'; t.answers['1+1'] = 2
+    r = run(cdp.port, '--mark', 'run1', 'exec', _js(tmp_path, '1+1'))
+    assert r.stdout == '2\n', r.stdout
+
+
+def test_match_and_port_flags_without_env(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/campus#/me/resume'); t.answers['1+1'] = 2
+    e = dict(os.environ); e.pop('CA_CDP_PORT', None); e.pop('TAB_MARK', None); e.pop('TAB_MATCH', None)
+    r = subprocess.run([sys.executable, SCRIPT, '--port', str(cdp.port), '--match', 'me/resume', 'exec', _js(tmp_path, '1+1')],
+                       capture_output=True, text=True, env=e, timeout=60)
+    assert r.stdout == '2\n', r.stdout
+
+
+def test_flags_also_work_after_the_subcommand(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    out = tmp_path / 's.png'
+    r = run(cdp.port, 'screenshot', str(out), '--mark', 'run1')
+    assert r.returncode == 0 and out.exists()
+
+
+def test_read_urls_pace_and_guard_every_flags(cdp, tmp_path):
+    texts = {f'https://x/job/j{i}': '岗位描述' * 100 for i in range(1, 5)}
+    t, state = _read_urls_tab(cdp, texts, captcha_at=1)
+    lst = tmp_path / 'list.tsv'
+    lst.write_text(''.join(f'j{i}\thttps://x/job/j{i}\n' for i in range(1, 5)), encoding='utf-8')
+    r = run(cdp.port, '--mark', 'run1', 'read-urls', str(lst), str(tmp_path / 'out'), '--pace', '0-0', '--guard-every', '2')
+    assert 'STOP guard' in r.stdout and state['guards'] == 1 and (tmp_path / 'out' / 'j2.json').exists()
