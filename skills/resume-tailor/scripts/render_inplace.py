@@ -14,6 +14,11 @@ from docx.oxml.ns import qn
 from docx_helpers import bullet, entry_header, rebuild_body, set_text
 from render_basic import parse
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 
 def has_drawing(p):
     pp = p._p

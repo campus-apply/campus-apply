@@ -10,6 +10,11 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 
 def parse(md):
     doc = {'name': '', 'contact': '', 'sections': []}

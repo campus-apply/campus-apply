@@ -86,6 +86,9 @@ def run_checks(m):
     rs.append(Result('browser', bool(b), b or '没找到 Chrome / Edge；装在别处可设 CA_BROWSER=<可执行文件路径>', '' if b else fix))
     fix = 'winget install Git.Git' if m.win else 'xcode-select --install 或 brew install git'
     rs.append(Result('git', m.has_cmd('git'), '只在从 GitHub 安装或更新插件时用到；没有它可以下载 zip 解压后按本地目录安装', '' if m.has_cmd('git') else fix, required=False))
+    fix = 'winget install oschwartz10612.Poppler 后把其 bin 目录加进 PATH（或 https://github.com/oschwartz10612/poppler-windows/releases ）' if m.win else 'brew install poppler'
+    rs.append(Result('pdftoppm', m.has_cmd('pdftoppm'), '看图片型 PDF（扫描件、网申导出）时把页面转成图；没有就用 pypdf 抽图或请用户截图',
+                     '' if m.has_cmd('pdftoppm') else fix, required=False))
     word = any(m.exists(p) for p in WORD_PATHS.get('win32' if m.win else 'darwin', []))
     rs.append(Result('word', word, '改简历时用 Word 导 PDF 核页数', '' if word else '没有 Word 就跳过核页数，改简历时会明确说"未核页数"', required=False))
     return rs

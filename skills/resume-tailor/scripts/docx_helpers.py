@@ -21,6 +21,11 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 
 

@@ -77,3 +77,11 @@ def test_cli_install_flag_runs_pip_for_missing_packages_only(tmp_path, monkeypat
     calls.clear()
     doctor.install_missing(doctor.run_checks(env()), env())
     assert calls == []
+
+
+def test_pdftoppm_is_optional_with_platform_hint():
+    rs = by_name(doctor.run_checks(env(which={'git'})))
+    assert 'pdftoppm' in rs and not rs['pdftoppm'].ok and not rs['pdftoppm'].required and 'poppler' in rs['pdftoppm'].fix
+    rs = by_name(doctor.run_checks(env(platform='win32', which={'git'})))
+    assert 'winget' in rs['pdftoppm'].fix or 'poppler' in rs['pdftoppm'].fix
+    assert by_name(doctor.run_checks(env(which={'git', 'pdfinfo', 'pdftoppm'})))['pdftoppm'].ok

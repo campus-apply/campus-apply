@@ -56,3 +56,22 @@ def test_section_limit_is_err_and_exit_code(tmp_path):
 def test_model_numbers_like_cet6_are_not_counted():
     res = cc.check("## 技能\n- 英语CET-6（598/710）", RULES, "598/710")
     assert not [m for l, m in levels(res) if l == 'WARN']
+
+
+def test_leading_list_number_is_not_counted_as_a_number():
+    res = cc.check("## 实习\n3.参与规划会议3次、实地调研6次。", RULES, FACTS)
+    assert not any('个数字' in m for l, m in levels(res) if l == 'WARN')
+
+
+def test_banned_word_inside_book_title_is_exempt_when_rule_says_so():
+    rules = dict(RULES, banned_words_exempt_in_quotes=True)
+    res = cc.check("## 实习\n- 撰写《数字化赋能报告》一篇", rules, FACTS)
+    assert not any('赋能' in m for l, m in levels(res) if l == 'ERR')
+    res = cc.check("## 实习\n- 为客户赋能", rules, FACTS)
+    assert any('赋能' in m for l, m in levels(res) if l == 'ERR')
+
+
+def test_year_month_in_different_formats_matches_the_fact_base():
+    facts = "德语 PHD4 于 2019 年 12 月通过；2021.06 获奖。"
+    res = cc.check("## 技能\n- 德语 PHD4（2019.12）\n- 获奖（2021-06）", RULES, facts)
+    assert not any('找不到' in m for l, m in levels(res) if l == 'WARN')

@@ -4,6 +4,11 @@
 不挪动、不覆盖用户已有文件；标记文件已存在且未加 --force 时只打印现状。退出码：0 成功，1 指定的文件不存在。"""
 import argparse, json, os, shutil, sys
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TPL = os.path.join(os.path.dirname(HERE), 'templates')
 MARK = 'campus-apply.json'

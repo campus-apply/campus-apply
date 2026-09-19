@@ -9,6 +9,9 @@
   chrome_cdp.py --mark <运行ID> exec <js文件>      在认领的标签页里执行 JS 文件，输出最后一个表达式的值
   chrome_cdp.py --match <url片段> exec <js文件>    按 URL 子串找第一个匹配的标签页（兜底）
   chrome_cdp.py --mark <运行ID> screenshot <输出.png>   把认领的标签页切到前台并截页面（只截网页内容）
+  chrome_cdp.py --mark <运行ID> click <目标>       发真实鼠标事件点一下（页面脚本里 el.click() 点不开的日期面板、级联菜单用它）。
+        目标三种写法：CSS 选择器（取第一个可见匹配）；`x,y` 视口坐标；`js:<表达式>`（求值得到元素）。
+        元素会先滚到视口中间再按中心点点击；输出 clicked <标签> <x>,<y>；找不到输出 NO_ELEMENT。
   chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
         出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令每 2 秒轮询日志到 DONE / ERR / 超时（默认 90 秒）。
@@ -25,7 +28,7 @@
 输出约定：找不到调试浏览器 ERR_NO_CDP（退出码 2）；没找到标签页 NO_MATCHING_TAB（1）；JS 抛异常 ERR_JS: …（1）。
 返回值是字符串就原样打印，其他类型打成 JSON。
 """
-import base64, json, os, platform, random, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
+import base64, json, os, platform, random, re, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
 
 PORT = int(os.environ.get('CA_CDP_PORT', '9222'))
 HOST = '127.0.0.1'
@@ -129,9 +132,9 @@ class Tab:
                 raise TabError(f"{method}: {msg['error'].get('message')}")
             return msg.get('result', {})
 
-    def evaluate(self, expression):
-        """执行表达式并等待 Promise；返回 (值, 异常描述或 None)。"""
-        r = self.call('Runtime.evaluate', expression=expression, returnByValue=True, awaitPromise=True)
+    def evaluate(self, expression, await_promise=True):
+        """执行表达式，默认等待 Promise；返回 (值, 异常描述或 None)。注入长脚本时传 await_promise=False，只等注入本身。"""
+        r = self.call('Runtime.evaluate', expression=expression, returnByValue=True, awaitPromise=await_promise)
         if 'exceptionDetails' in r:
             ex = r['exceptionDetails']
             desc = ex.get('exception', {}).get('description') or ex.get('text') or 'JS 异常'
@@ -298,7 +301,14 @@ def cmd_open(url, run_id=None):
     return 0
 
 
-def cmd_screenshot(out_path):
+RECT_JS = """(() => {{ const el = {expr}; if (!el) return null;
+  el.scrollIntoView({{block: 'center', behavior: 'instant'}});
+  const r = el.getBoundingClientRect();
+  return JSON.stringify({{x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName}}); }})()"""
+
+
+def with_tab(fn):
+    """找到 TAB_MARK / TAB_MATCH 指定的标签页，交给 fn(tab) 处理；错误行统一在这里打印。"""
     mark, match = os.environ.get('TAB_MARK', ''), os.environ.get('TAB_MATCH', '')
     if not (mark or match):
         print('ERR_NEED_TAB_MARK_OR_TAB_MATCH')
@@ -311,25 +321,66 @@ def cmd_screenshot(out_path):
         print('NO_MATCHING_TAB')
         return 1
     try:
-        tab.call('Page.bringToFront')
-        data = tab.call('Page.captureScreenshot', format='png')['data']
+        return fn(tab)
     except TabError as e:
         print(f'ERR_CDP: {e}')
         return 1
     finally:
         tab.close()
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    with open(out_path, 'wb') as f:
-        f.write(base64.b64decode(data))
-    print(out_path)
-    return 0
+
+
+def mouse_click(tab, x, y):
+    tab.call('Input.dispatchMouseEvent', type='mouseMoved', x=x, y=y)
+    tab.call('Input.dispatchMouseEvent', type='mousePressed', x=x, y=y, button='left', clickCount=1)
+    tab.call('Input.dispatchMouseEvent', type='mouseReleased', x=x, y=y, button='left', clickCount=1)
+
+
+def cmd_click(target):
+    def go(tab):
+        m = re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*', target)
+        if m:
+            x, y = float(m.group(1)), float(m.group(2))
+            mouse_click(tab, x, y)
+            print(f'clicked {m.group(1)},{m.group(2)}')
+            return 0
+        if target.startswith('js:'):
+            expr = target[3:]
+        else:
+            sel = json.dumps(target)
+            expr = f'[...document.querySelectorAll({sel})].find(e => e.offsetParent !== null)'
+        v, err = tab.evaluate(RECT_JS.format(expr=expr))
+        if err:
+            print(f'ERR_JS: {err}')
+            return 1
+        if not v:
+            print(f'NO_ELEMENT {target}')
+            return 1
+        time.sleep(0.3)  # 滚动后位置可能还在变，再取一次
+        v, _ = tab.evaluate(RECT_JS.format(expr=expr))
+        r = json.loads(v)
+        mouse_click(tab, r['x'], r['y'])
+        print(f"clicked {r['tag']} {r['x']:g},{r['y']:g}")
+        return 0
+    return with_tab(go)
+
+
+def cmd_screenshot(out_path):
+    def go(tab):
+        tab.call('Page.bringToFront')
+        data = tab.call('Page.captureScreenshot', format='png')['data']
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        with open(out_path, 'wb') as f:
+            f.write(base64.b64decode(data))
+        print(out_path)
+        return 0
+    return with_tab(go)
 
 
 def format_value(v):
     return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
 
 
-def run_js(js_text):
+def run_js(js_text, await_promise=True):
     """在 TAB_MARK / TAB_MATCH 指定的标签页执行一段 JS；返回 (退出码, 输出文本或 None)。出错时输出文本就是错误行。"""
     mark, match = os.environ.get('TAB_MARK', ''), os.environ.get('TAB_MATCH', '')
     if not (mark or match):
@@ -340,7 +391,7 @@ def run_js(js_text):
     if tab is None:
         return 1, 'NO_MATCHING_TAB'
     try:
-        v, err = tab.evaluate(js_text)
+        v, err = tab.evaluate(js_text, await_promise)
     except TabError as e:
         return 1, f'ERR_CDP: {e}'
     finally:
@@ -371,7 +422,7 @@ def cmd_stage(stage_path, libs=(), max_seconds=90):
         with open(lib, encoding='utf-8') as f:
             parts.append(f.read())
         parts.append(';')  # 库文件末尾不一定有分号，没有的话下一段 (async…) 会被当成函数调用
-    code, out = run_js('\n'.join(parts))
+    code, out = run_js('\n'.join(parts), await_promise=False)  # stage 是 async 函数，只等注入，不等它跑完
     if code:
         print(out)
         return code
@@ -551,6 +602,8 @@ def main(argv):
         return cmd_open(*args)
     if cmd == 'screenshot' and len(args) == 1:
         return cmd_screenshot(args[0])
+    if cmd == 'click' and len(args) == 1:
+        return cmd_click(args[0])
     if cmd == 'stage' and args:
         libs, max_s, rest = [], 90, []
         i = 0

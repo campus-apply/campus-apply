@@ -4,8 +4,16 @@
 文本按 "## 节名" 分节；limits.json 形如 {"工作描述": 2000}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。"""
 import argparse, json, re, sys
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 NUM = re.compile(r'\d[\d,，.]*%?')
 YEAR = re.compile(r'(19|20)\d\d')
+LIST_PREFIX = re.compile(r'^\s*(?:[-*•·]\s*)?\d{1,2}[.、)]\s*')   # 行首的列表序号："3." "2、" "1)"
+YM = re.compile(r'((?:19|20)\d\d)\s*[-./年]\s*(\d{1,2})\s*月?')     # 2019.12 / 2019-12 / 2019 年 12 月
+QUOTED = re.compile(r'《[^》]*》|「[^」]*」|"[^"]*"')
 
 
 def split_sections(text):
@@ -24,6 +32,11 @@ def norm(s):
     return s.replace(',', '').replace('，', '').rstrip('.')
 
 
+def norm_ym(s):
+    """把各种写法的年月统一成 2019-12，便于和事实库互相匹配。"""
+    return YM.sub(lambda m: f'{m.group(1)}-{int(m.group(2)):02d}', s)
+
+
 def numbers_in(s):
     """抽出数字，跳过型号里的数字（CET-6、GPT-4 这类"字母-数字"）。"""
     out = []
@@ -36,10 +49,11 @@ def numbers_in(s):
 
 def check(text, rules, facts_text, limits=None):
     out = []
-    facts_norm = norm(facts_text)
+    facts_norm = norm(norm_ym(facts_text))
     for name, body in split_sections(text):
+        body_for_words = QUOTED.sub('', body) if rules.get('banned_words_exempt_in_quotes') else body  # 书名号、引号里的标题名可豁免
         for w in rules.get('banned_words', []):
-            if w in body: out.append(('ERR', name, f'禁用词「{w}」'))
+            if w in body_for_words: out.append(('ERR', name, f'禁用词「{w}」'))
         for ch in rules.get('banned_chars', []):
             if ch in body: out.append(('ERR', name, f'禁用符号「{ch}」'))
         for w in rules.get('sensitive_terms', []):
@@ -50,12 +64,12 @@ def check(text, rules, facts_text, limits=None):
         if maxn:
             for ln in body.splitlines():
                 if ln.strip() and not ln.startswith('#'):
-                    nums = [m for m in numbers_in(ln) if not YEAR.fullmatch(norm(m))]
+                    nums = [m for m in numbers_in(LIST_PREFIX.sub('', ln)) if not YEAR.fullmatch(norm(m))]
                     if len(nums) > maxn:
                         out.append(('WARN', name, f'一条里有{len(nums)}个数字（上限{maxn}）：{ln.strip()[:40]}'))
         if rules.get('number_source_check'):
             seen = set()
-            for m in numbers_in(body):
+            for m in numbers_in(norm_ym(body)):
                 v = norm(m)
                 if len(v.rstrip('%')) < 2 or YEAR.fullmatch(v) or v in seen: continue
                 seen.add(v)

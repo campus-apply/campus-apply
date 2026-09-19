@@ -339,3 +339,42 @@ def test_read_urls_pace_and_guard_every_flags(cdp, tmp_path):
     lst.write_text(''.join(f'j{i}\thttps://x/job/j{i}\n' for i in range(1, 5)), encoding='utf-8')
     r = run(cdp.port, '--mark', 'run1', 'read-urls', str(lst), str(tmp_path / 'out'), '--pace', '0-0', '--guard-every', '2')
     assert 'STOP guard' in r.stdout and state['guards'] == 1 and (tmp_path / 'out' / 'j2.json').exists()
+
+
+def test_click_selector_sends_trusted_mouse_events_at_element_center(cdp):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    t.responder = lambda expr: '{"x":120.5,"y":300,"tag":"INPUT"}' if 'getBoundingClientRect' in expr and 'input.dob' in expr else NotImplemented
+    r = run(cdp.port, '--mark', 'run1', 'click', 'input.dob')
+    assert r.returncode == 0 and r.stdout == 'clicked INPUT 120.5,300\n', r.stdout
+    types = [m['type'] for m in t.mouse]
+    assert types == ['mouseMoved', 'mousePressed', 'mouseReleased']
+    assert all(m['x'] == 120.5 and m['y'] == 300 for m in t.mouse)
+    assert t.mouse[1]['button'] == 'left' and t.mouse[1]['clickCount'] == 1
+
+
+def test_click_reports_no_element_when_selector_matches_nothing(cdp):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    t.responder = lambda expr: None if 'getBoundingClientRect' in expr else NotImplemented
+    r = run(cdp.port, '--mark', 'run1', 'click', '.nope')
+    assert r.stdout == 'NO_ELEMENT .nope\n' and r.returncode == 1 and t.mouse == []
+
+
+def test_click_accepts_coordinates_and_js_expression(cdp):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    r = run(cdp.port, '--mark', 'run1', 'click', '40,50')
+    assert r.stdout == 'clicked 40,50\n' and [m['type'] for m in t.mouse] == ['mouseMoved', 'mousePressed', 'mouseReleased']
+    t.mouse.clear()
+    t.responder = lambda expr: '{"x":1,"y":2,"tag":"DIV"}' if 'getBoundingClientRect' in expr and "innerText.trim()==='广东'" in expr else NotImplemented
+    r = run(cdp.port, '--mark', 'run1', 'click', "js:[...document.querySelectorAll('li')].find(e=>e.innerText.trim()==='广东')")
+    assert r.stdout == 'clicked DIV 1,2\n' and len(t.mouse) == 3
+
+
+def test_stage_injection_does_not_wait_for_the_async_script_to_finish(cdp, tmp_path):
+    """stage 脚本是 (async () => {...})()，注入只等注入本身，不等它跑完；否则长脚本必超时。"""
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'; t.slow_promise = True
+    t.responder = lambda expr: 'DONE' if 'window.__caRun===' in expr else None
+    stage = _js(tmp_path, "(async () => { await new Promise(r => setTimeout(r, 60000)); })()", 'stage.js')
+    r = run(cdp.port, '--mark', 'run1', 'stage', stage, '--max', '10', env={'CA_CDP_TIMEOUT': '1'})
+    assert 'ERR_CDP' not in r.stdout and r.stdout.rstrip('\n') == 'DONE', r.stdout
+    inject = next(i for i, e in enumerate(t.evaluated) if '(async' in e)
+    assert t.await_flags[inject] is False

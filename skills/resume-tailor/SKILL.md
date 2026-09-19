@@ -8,6 +8,7 @@ description: 对照一份 JD，从事实库挑素材、定口径、写出结构�
 ## 前提
 - 当前目录有 `campus-apply.json`（没有先用 resume-facts）。
 - 有一份 JD：在 `applications/<公司>-<岗位>/jd.md`（job-screen 建的），或用户现给的文本/链接（先存成 jd.md）。
+- 没有 JD 也能走"通用版"：用户要先填某个站点的在线简历 / 候选人档案页，或想要一份不针对岗位的底稿。通用版跳过第 2、3 步，第 4 步以 `campus-apply.json` 里偏好的岗位类型定主线、所有经历按事实库全量写，产物放 `applications/_工作区/resume.md`；站点有自述类字段时第 8 步照走，写一版按偏好岗位类型的通用自述放 `form.md`，标明"通用版，投具体岗位时重写"。先告诉用户这是通用版、和针对岗位的版本有什么区别。
 
 ## 步骤
 1. 读：`jd.md`、`campus-apply.json` 里列的全部事实库、`rules.json`、`references/style-rules.md`；如果 `applications/` 里有以前的投递，读最近一份 `resume.md` 作为起点。

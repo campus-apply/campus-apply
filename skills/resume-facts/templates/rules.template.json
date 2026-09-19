@@ -5,6 +5,7 @@
   "sensitive_terms": [],
   "forbidden_claims": ["主导上线", "完成成交", "独立开发", "全面负责", "唯一"],
   "max_numbers_per_bullet": 2,
+  "banned_words_exempt_in_quotes": false,
   "number_source_check": true,
   "anonymize_clients": true,
   "ai_script_phrase": "借助AI编写",

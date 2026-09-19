@@ -21,6 +21,9 @@ class FakeTab:
         self.responder = None  # 可选：函数(表达式) → 返回值；返回 NotImplemented 表示不处理
         self.evaluated = []    # 收到过的表达式，供断言
         self.front = 0
+        self.mouse = []        # 收到的 Input.dispatchMouseEvent 参数
+        self.slow_promise = False  # 模拟长时间不 resolve 的 Promise：awaitPromise=True 时拖 2.5 秒再回
+        self.await_flags = []  # 每次 Runtime.evaluate 的 awaitPromise 值，供断言
         self.hang = False      # 模拟连上就不回话的标签页
 
     def info(self, port):
@@ -118,10 +121,17 @@ class FakeCDP:
             return {'id': rid, 'result': {}}
         if m == 'Page.captureScreenshot':
             return {'id': rid, 'result': {'data': self.png}}
+        if m == 'Input.dispatchMouseEvent':
+            tab.mouse.append(p)
+            return {'id': rid, 'result': {}}
         if m != 'Runtime.evaluate':
             return {'id': rid, 'error': {'code': -32601, 'message': f"'{m}' wasn't found"}}
         expr = p.get('expression', '')
         tab.evaluated.append(expr)
+        tab.await_flags.append(bool(p.get('awaitPromise')))
+        if tab.slow_promise and p.get('awaitPromise') and '(async' in expr:
+            import time as _t
+            _t.sleep(2.5)
         if "sessionStorage.getItem('__caClaim')" in expr:
             return _val(rid, tab.mark or '')
         if "sessionStorage.setItem('__caClaim'," in expr:

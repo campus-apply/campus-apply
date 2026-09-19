@@ -8,6 +8,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Windows 终端默认不是 UTF-8，中文会乱码
+except AttributeError:
+    pass
+
 COLS = [('档', 'tier', 12), ('岗位', 'title', 30), ('类别', 'cat', 12), ('地点', 'loc', 8), ('性质', 'nature', 6), ('发布日期', 'date', 11),
         ('学历', 'edu', 12), ('专业要求', 'major', 34), ('语言', 'lang', 10), ('优先项', 'pri', 30), ('工作内容一句话', 'duty', 40),
         ('理由', 'why', 44), ('缺口/剔除原因', 'gap', 34), ('链接', 'url', 50)]
