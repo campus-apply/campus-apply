@@ -1,6 +1,6 @@
 ---
 name: resume-facts
-description: 初始化 campus-apply 工作目录、建立带来源的个人经历事实库、做口径访谈生成 rules.json、做求职偏好访谈写进 campus-apply.json。Use when the user starts job hunting, wants to set up their fact base / resume workspace, or says 建事实库 / 初始化 / 整理经历 / 定口径 / 我想投什么.
+description: 建立求职工作目录和带来源的个人经历事实库，并通过访谈确定口径、求职偏好与个人档案。Use when the user starts job hunting, wants to set up their fact base / resume workspace, or says 建事实库 / 初始化 / 整理经历 / 定口径 / 我想投什么.
 ---
 
 # resume-facts：工作目录、事实库、口径、偏好
@@ -29,3 +29,16 @@ description: 初始化 campus-apply 工作目录、建立带来源的个人经�
 
 ## 不做
 不生成简历、不碰浏览器、不上网查用户信息。
+
+## 执行清单（复制到 `applications/_工作区/resume-facts-执行清单_<日期>.md`）
+```
+- [ ] 0 doctor 全部必需项 OK（缺 pip 包 —— 等用户回复：）
+- [ ] 1 目录里的简历与事实类文件列给用户；定默认模板与事实库 —— 等用户回复：
+- [ ] 2 init_workspace --dir <工作目录>
+- [ ] 3 读简历写事实库（每条带来源）；事实缺口问题 —— 等用户回复：
+- [ ] 4 通用口径 8 题（单独一条消息）—— 等用户回复：
+- [ ] 5 求职偏好 7 题 —— 等用户回复：（用户自填 → 给字段表，填完校验）
+- [ ] 6 个人档案 —— 等用户回复：
+- [ ] 7 log.txt
+- [ ] 8 指到下一步：有招聘页 → job-screen；有 JD → resume-tailor
+```

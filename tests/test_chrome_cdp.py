@@ -270,6 +270,23 @@ def test_launch_args_include_port_profile_and_url():
     assert args[0] == '/x/chrome'
     assert '--remote-debugging-port=9222' in args and '--user-data-dir=/home/u/campus-apply-chrome' in args
     assert '--no-first-run' in args and args[-1] == 'https://a/'
+    assert '--disable-background-timer-throttling' in args and '--disable-renderer-backgrounding' in args   # 后台标签页不减速
+
+
+def test_click_waits_until_the_element_stops_moving(cdp):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    calls = {'n': 0}
+
+    def responder(expr):
+        if 'getBoundingClientRect' in expr:
+            calls['n'] += 1
+            y = 300 if calls['n'] >= 3 else 100 * calls['n']     # 前两次还在滚动，第三次起稳定
+            return '{"x":50,"y":%d,"tag":"DIV"}' % y
+        return NotImplemented
+    t.responder = responder
+    r = run(cdp.port, '--mark', 'run1', 'click', '.btn')
+    assert r.stdout == 'clicked DIV 50,300\n', r.stdout
+    assert all(m['y'] == 300 for m in t.mouse)
 
 
 def test_stage_keeps_polling_while_tab_is_temporarily_unreachable(cdp, tmp_path):

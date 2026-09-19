@@ -16,7 +16,7 @@ MARK = 'campus-apply.json'
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--dir', default='.')
+    ap.add_argument('--dir', required=True, help='工作目录：用户打开的那个文件夹；不猜当前目录')
     ap.add_argument('--facts', nargs='*', default=None, help='事实库文件（相对工作目录）')
     ap.add_argument('--resume-docx', default=None, help='用户现有简历 docx（相对工作目录）')
     ap.add_argument('--force', action='store_true')

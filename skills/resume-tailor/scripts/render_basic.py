@@ -83,4 +83,6 @@ def render(md, out_path):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        print(__doc__); sys.exit(2)
     render(open(sys.argv[1], encoding='utf-8').read(), sys.argv[2])

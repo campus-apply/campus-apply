@@ -75,3 +75,14 @@ def test_year_month_in_different_formats_matches_the_fact_base():
     facts = "德语 PHD4 于 2019 年 12 月通过；2021.06 获奖。"
     res = cc.check("## 技能\n- 德语 PHD4（2019.12）\n- 获奖（2021-06）", RULES, facts)
     assert not any('找不到' in m for l, m in levels(res) if l == 'WARN')
+
+
+def test_limits_accept_min_max_objects_and_byte_units():
+    limits = {'自我评价': {'min': 5, 'max': 8}, '奖项': {'max': 6, 'unit': '字节'}, '描述': 4}
+    res = cc.check("## 自我评价\n一二三\n## 奖项\n一二三\n## 描述\n一二三四五六", RULES, FACTS, limits)
+    errs = [(s, m) for l, s, m in res if l == 'ERR']
+    assert any(s == '自我评价' and '低于下限' in m for s, m in errs)
+    assert any(s == '奖项' and '字节' in m and '超长' in m for s, m in errs)      # 3 个汉字 = 9 字节 > 6
+    assert any(s == '描述' and '超长' in m for s, m in errs)
+    ok = cc.check("## 自我评价\n一二三四五六", RULES, FACTS, {'自我评价': {'min': 5, 'max': 8}})
+    assert not [m for l, s, m in ok if l == 'ERR']

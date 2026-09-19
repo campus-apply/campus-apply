@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """内容检查：禁用词、禁用符号、敏感词、不可证明的表述、每条数字个数、数字出处、分节字数上限。
 用法：python3 check_content.py <文本.md> --rules rules.json --facts 事实库.md [更多.md] [--limits limits.json]
-文本按 "## 节名" 分节；limits.json 形如 {"工作描述": 2000}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。"""
+文本按 "## 节名" 分节；limits.json 每项是上限数字，或 {"min": 200, "max": 1000, "unit": "字"|"字节"}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。"""
 import argparse, json, re, sys
 
 try:
@@ -75,8 +75,14 @@ def check(text, rules, facts_text, limits=None):
                 seen.add(v)
                 if v not in facts_norm and v.rstrip('%') not in facts_norm:
                     out.append(('WARN', name, f'数字「{m}」在事实库里找不到'))
-        if limits and name in limits and len(body.strip()) > limits[name]:
-            out.append(('ERR', name, f'超长：{len(body.strip())} 字 > 上限 {limits[name]}'))
+        if limits and name in limits:
+            lim = limits[name] if isinstance(limits[name], dict) else {'max': limits[name]}
+            unit = lim.get('unit', '字')
+            n = len(body.strip().encode('utf-8')) if unit == '字节' else len(body.strip())
+            if lim.get('max') is not None and n > lim['max']:
+                out.append(('ERR', name, f'超长：{n} {unit} > 上限 {lim["max"]}'))
+            if lim.get('min') is not None and n < lim['min']:
+                out.append(('ERR', name, f'低于下限：{n} {unit} < 下限 {lim["min"]}'))
         out.append(('OK', name, f'{len(body.strip())} 字'))
     return out
 

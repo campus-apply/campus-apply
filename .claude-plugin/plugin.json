@@ -1,7 +1,7 @@
 {
   "name": "campus-apply",
   "description": "国内校招网申全流程：事实库、筛岗、改简历、填网申。Resume tailoring and application form filling for CN campus recruitment, driven by a fact base and the user's own logged-in browser tab.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": { "name": "Wenkai Qu" },
   "license": "MIT",
   "keywords": ["resume", "campus-recruitment", "job-application", "chinese", "skills"]

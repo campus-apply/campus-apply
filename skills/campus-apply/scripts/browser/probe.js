@@ -1,6 +1,6 @@
-// probe.js —— 只读探测：列出页面里可见的表单控件（标签、类型、上限、必填、禁用/只读、当前值长度），按最近的标题分组。返回 JSON 字符串。
+// probe.js —— 只读探测：列出页面里可见的表单控件（标签、类型、maxlength、页面明文字数要求 hintLimit、必填、禁用/只读、当前值长度），按最近的标题分组。返回 JSON 字符串。
 // 结果是启发式的静态分类；kind 带问号（dropdown?）表示只是像下拉，按 apply-fill 的细则做一次无害的行为探测再定。
-// 证件号、密码、验证码、手机、邮箱这类字段只报长度，不输出内容。
+// 证件号、密码、验证码、手机、邮箱这类字段只报长度，不输出内容；按标签、属性名（name/id/placeholder/autocomplete）和值的形态三路识别。
 (() => {
   const vis = el => el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden';
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -54,10 +54,19 @@
     const hasPopup = el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-expanded') || el.getAttribute('role') === 'combobox';
     if (k === 'text' && (hasPopup || dispText || (hasCaret && (el.readOnly || !val)))) k = 'dropdown?';
     if (dispText && !val) val = dispText;
-    const secret = /证件|身份证|护照|密码|password|验证码|captcha|银行卡|card|手机|电话|phone|邮箱|email/i.test(label + ' ' + headingOf(box));
+    // 敏感字段：标签、属性名、值的形态三路判断，标签为空的手机框也要认出来
+    const attrs = ['name', 'id', 'placeholder', 'autocomplete', 'inputcolname', 'data-field', 'aria-label'].map(a => el.getAttribute(a) || '').join(' ');
+    const secretByText = /证件|身份证|护照|密码|password|验证码|captcha|银行卡|card|手机|电话|phone|mobile|\btel|邮箱|email|mail/i.test(label + ' ' + headingOf(box) + ' ' + attrs);
+    const digits = val.replace(/\D/g, '');
+    const secretByValue = (/^\+?[\d\s-]{11,16}$/.test(val.trim()) && digits.length === 11) || /^\d{17}[\dXx]$/.test(val.trim()) || /^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(val.trim());
+    const secret = secretByText || secretByValue;
+    // 页面明文写的字数要求（"200-1000 字""不超过 500 字"），和 maxlength 属性分开报，两者常常不一致
+    const hintText = clean(wrap.innerText || '').replace(clean(val), '');
+    const hm = hintText.match(/(\d+)\s*[个]?字?\s*[-~至到]\s*(\d+)\s*[个]?字|(?:不超过|最多|限|以内)\s*(\d+)\s*[个]?字|(\d+)\s*[个]?字以内/);
+    const hintLimit = hm ? (hm[1] ? { min: +hm[1], max: +hm[2] } : { max: +(hm[3] || hm[4]) }) : null;
     controls.push({ i: controls.length, heading: headingOf(box), label, kind: k, maxlength: el.getAttribute('maxlength'),
       required: !!(box.closest('.ant-form-item-required, [class*="required"]') || /\*/.test(label)),
-      disabled: !!el.disabled, readonly: !!el.readOnly,
+      disabled: !!el.disabled, readonly: !!el.readOnly, hintLimit,
       valueLen: val.length, valuePreview: secret ? (val ? '【已隐藏】' : '') : val.slice(0, 30), tag: box.tagName.toLowerCase(), cls: String(box.className || '').slice(0, 80) });
   }
   const headings = [...new Set([...document.querySelectorAll('h1,h2,h3,h4,[class*="title"],[class*="header"]')].filter(vis).map(h => clean(h.innerText)).filter(t => t && t.length < 40))].slice(0, 60);

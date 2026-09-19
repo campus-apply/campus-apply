@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""通过 Chrome DevTools Protocol 操作一个专用调试浏览器里的标签页。只用标准库，macOS / Windows 通用。
+"""通过 Chrome DevTools Protocol 操作一个专用浏览器里的标签页。只用标准库，macOS / Windows 通用。
 
 用法：
   chrome_cdp.py launch [URL]            用专用配置目录启动一个带远程调试端口的 Chrome/Edge（已在跑就只报版本）
@@ -355,9 +355,14 @@ def cmd_click(target):
         if not v:
             print(f'NO_ELEMENT {target}')
             return 1
-        time.sleep(0.3)  # 滚动后位置可能还在变，再取一次
-        v, _ = tab.evaluate(RECT_JS.format(expr=expr))
         r = json.loads(v)
+        for _ in range(8):  # 滚动或布局还在动时位置会变；连续两次测得同一位置才点，最多等约 2 秒
+            time.sleep(0.25)
+            v2, _ = tab.evaluate(RECT_JS.format(expr=expr))
+            r2 = json.loads(v2) if v2 else r
+            if (r2['x'], r2['y']) == (r['x'], r['y']):
+                break
+            r = r2
         mouse_click(tab, r['x'], r['y'])
         print(f"clicked {r['tag']} {r['x']:g},{r['y']:g}")
         return 0
@@ -524,7 +529,9 @@ def find_browser():
 
 def launch_args(binary, port, profile_dir, url=None):
     args = [binary, f'--remote-debugging-port={port}', f'--user-data-dir={profile_dir}',
-            '--no-first-run', '--no-default-browser-check']
+            '--no-first-run', '--no-default-browser-check',
+            # 后台标签页的定时器会被浏览器压到每秒一次，填表脚本会慢十倍；这三个开关让脚本在后台也按正常速度跑
+            '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows']
     if url:
         args.append(url)
     return args

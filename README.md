@@ -6,7 +6,7 @@ Campus-recruitment application skills for Chinese job sites, built for Claude Co
 
 ## 它做什么，不做什么 / What it does and does not
 
-它做四件事：把你的经历、口径、求职偏好和个人档案整理成带来源的本地文件；在公司招聘页上按你的偏好筛岗，全量清单和每个岗位的硬要求先给你看；对照岗位描述在你现有的简历 docx 上原地改出一页，并写网申长文本和自述；陪你逐页走完网申，每页先说清哪些它填、哪些要你做，按节奏填并回读。
+它做四件事：把你的经历、口径、求职偏好和个人档案整理成带来源的本地文件；在公司招聘页上按你的偏好筛岗，全量清单和每个岗位的硬要求先给你看；对照岗位描述（JD）在你现有的简历 docx 上原地改出一页，并写网申长文本和自述；陪你逐页走完网申，每页先说清哪些它填、哪些要你做，按节奏填并回读。
 
 它不做：批量投递、自动提交、解验证码、上传文件、填证件号和密码、调用招聘站点的接口、跨站抓取岗位。
 
@@ -22,7 +22,7 @@ It keeps a sourced fact base with your preferences, screens jobs on a company's 
 | `resume-tailor` | 对照岗位出素材方案、写定稿文字、原地改 docx、写网申长文本与自述，写完过去 AI 味清单 |
 | `apply-fill` | 陪跑式填表：认领标签页、探测控件、逐页填写与回读、保存后核对、提交前比对预览 |
 
-顺序：`resume-facts`（一次）→ `job-screen` → `resume-tailor` → `apply-fill`。已有岗位描述可以跳过筛岗。
+顺序：`resume-facts`（一次）→ `job-screen` → `resume-tailor` → `apply-fill`。已有 JD 可以跳过筛岗。
 
 Flow: facts once, then screen, tailor, fill. Skip screening when you already have a job description.
 
@@ -33,6 +33,8 @@ Claude Code 三种装法，任选其一，装完新开一个会话就能看到�
 1. 对 agent 说一句"帮我安装 GitHub 上 wenkaiqu014-hue/campus-apply 这个 Claude Code 插件"，它会替你执行下面两条命令。
 2. 自己在 Claude Code 里输入 `/plugin marketplace add wenkaiqu014-hue/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`。
 3. 电脑上没有 Git（从 GitHub 安装要靠它）：到 [Releases](https://github.com/wenkaiqu014-hue/campus-apply/releases) 下载 zip 解压，`/plugin marketplace add <解压后的目录>`，再 `/plugin install campus-apply@campus-apply`；这一步也可以让 agent 做。
+
+更新：`/plugin marketplace update campus-apply` 再 `/plugin update campus-apply@campus-apply`，然后 `/reload-plugins` 或新开会话（对 agent 说"把 campus-apply 插件更新到最新版"也行）。想自动更新，在 `/plugin` 的 Marketplaces 页对 campus-apply 开 auto-update；第三方 marketplace 默认不自动更新。用 zip 装的要重新下载解压覆盖再更新。
 
 其他 harness 或开发模式：
 
@@ -60,6 +62,8 @@ Browser automation (screening and form filling) drives Chrome or Edge over the D
 ## 数据与隐私 / Data
 
 个人数据全部留在你的工作目录，仓库里只有流程、模板、脚本。证件号、密码、验证码永远不经手，也不写进任何文件。站点笔记不记账号、不记个人信息。工作目录不要放进公开仓库。
+
+想反馈问题：对 agent 说"打一个反馈包"，它会运行 `feedback_bundle.py`，把执行清单、日志、站点笔记、填写报告、筛选表收到桌面一个文件夹并自动打码（手机、邮箱、证件号、出生日期、姓名、路径里的用户名），不收事实库、简历、网申正文，不压缩也不发送；你自己翻一遍再发。agent 不会主动打包。
 
 ## 致谢与许可 / Credits and license
 

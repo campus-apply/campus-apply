@@ -40,3 +40,9 @@ def test_second_run_does_not_overwrite(tmp_path):
     r = run('--dir', str(tmp_path))
     assert r.returncode == 0 and '已初始化' in r.stdout
     assert json.load(open(tmp_path / 'rules.json', encoding='utf-8'))['banned_words'] == ['自定义']
+
+
+def test_without_dir_prints_usage_and_creates_nothing(tmp_path):
+    r = subprocess.run([sys.executable, SCRIPT], capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 2 and '--dir' in (r.stdout + r.stderr)
+    assert not (tmp_path / 'campus-apply.json').exists() and not (tmp_path / 'rules.json').exists()

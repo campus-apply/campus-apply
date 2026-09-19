@@ -53,4 +53,6 @@ def dump(path, runs=False, raw=False):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print(__doc__); sys.exit(2)
     print(dump(sys.argv[1], '--runs' in sys.argv, '--raw' in sys.argv))
