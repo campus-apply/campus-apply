@@ -28,7 +28,7 @@ Flow: facts once, then screen, tailor, fill. Skip screening when you already hav
 
 ## 安装 / Install
 
-Claude Code：在 Claude Code 里执行 `/plugin marketplace add /path/to/campus-apply`，再 `/plugin install campus-apply@campus-apply`。
+Claude Code：在 Claude Code 里执行 `/plugin marketplace add wenkaiqu014-hue/campus-apply`（本地目录则填路径），再 `/plugin install campus-apply@campus-apply`，新开一个会话就能看到五个 skill。
 
 其他 harness 或开发模式：
 
