@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""内容检查：禁用词、禁用符号、敏感词、不可证明的表述、每条数字个数、数字出处、分节字数上限。
+用法：python3 check_content.py <文本.md> --rules rules.json --facts 事实库.md [更多.md] [--limits limits.json]
+文本按 "## 节名" 分节；limits.json 形如 {"工作描述": 2000}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。"""
+import argparse, json, re, sys
+
+NUM = re.compile(r'\d[\d,，.]*%?')
+YEAR = re.compile(r'(19|20)\d\d')
+
+
+def split_sections(text):
+    secs, name, buf = [], '(全文)', []
+    for line in text.splitlines():
+        if line.startswith('## '):
+            if buf: secs.append((name, '\n'.join(buf)))
+            name, buf = line[3:].strip(), []
+        else:
+            buf.append(line)
+    if buf: secs.append((name, '\n'.join(buf)))
+    return secs
+
+
+def norm(s):
+    return s.replace(',', '').replace('，', '').rstrip('.')
+
+
+def numbers_in(s):
+    """抽出数字，跳过型号里的数字（CET-6、GPT-4 这类"字母-数字"）。"""
+    out = []
+    for m in NUM.finditer(s):
+        i = m.start()
+        if i >= 2 and s[i - 1] == '-' and s[i - 2].isalpha(): continue
+        out.append(m.group())
+    return out
+
+
+def check(text, rules, facts_text, limits=None):
+    out = []
+    facts_norm = norm(facts_text)
+    for name, body in split_sections(text):
+        for w in rules.get('banned_words', []):
+            if w in body: out.append(('ERR', name, f'禁用词「{w}」'))
+        for ch in rules.get('banned_chars', []):
+            if ch in body: out.append(('ERR', name, f'禁用符号「{ch}」'))
+        for w in rules.get('sensitive_terms', []):
+            if w in body: out.append(('ERR', name, f'敏感词「{w}」'))
+        for w in rules.get('forbidden_claims', []):
+            if w in body: out.append(('WARN', name, f'不可证明的表述「{w}」'))
+        maxn = rules.get('max_numbers_per_bullet')
+        if maxn:
+            for ln in body.splitlines():
+                if ln.strip() and not ln.startswith('#'):
+                    nums = [m for m in numbers_in(ln) if not YEAR.fullmatch(norm(m))]
+                    if len(nums) > maxn:
+                        out.append(('WARN', name, f'一条里有{len(nums)}个数字（上限{maxn}）：{ln.strip()[:40]}'))
+        if rules.get('number_source_check'):
+            seen = set()
+            for m in numbers_in(body):
+                v = norm(m)
+                if len(v.rstrip('%')) < 2 or YEAR.fullmatch(v) or v in seen: continue
+                seen.add(v)
+                if v not in facts_norm and v.rstrip('%') not in facts_norm:
+                    out.append(('WARN', name, f'数字「{m}」在事实库里找不到'))
+        if limits and name in limits and len(body.strip()) > limits[name]:
+            out.append(('ERR', name, f'超长：{len(body.strip())} 字 > 上限 {limits[name]}'))
+        out.append(('OK', name, f'{len(body.strip())} 字'))
+    return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument('text'); ap.add_argument('--rules', required=True)
+    ap.add_argument('--facts', nargs='+', required=True); ap.add_argument('--limits')
+    a = ap.parse_args(argv)
+    rules = json.load(open(a.rules, encoding='utf-8'))
+    facts = '\n'.join(open(f, encoding='utf-8').read() for f in a.facts)
+    limits = json.load(open(a.limits, encoding='utf-8')) if a.limits else None
+    res = check(open(a.text, encoding='utf-8').read(), rules, facts, limits)
+    for lvl, sec, msg in res: print(f'[{lvl}] {sec}: {msg}')
+    return 1 if any(l == 'ERR' for l, _, _ in res) else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

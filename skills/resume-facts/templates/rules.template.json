@@ -1,0 +1,16 @@
+{
+  "_说明": "内容红线。resume-tailor 与 apply-fill 写任何文字前都按这里检查（scripts/check_content.py）。通过 resume-facts 的口径访谈填写，之后每次投递只补新条目。",
+  "banned_words": ["赋能", "闭环", "沉淀", "抓手", "打通", "助力", "此外", "不仅", "而且", "深度", "全面", "极大地", "有效地"],
+  "banned_chars": ["→", "×", "➡"],
+  "sensitive_terms": [],
+  "forbidden_claims": ["主导上线", "完成成交", "独立开发", "全面负责", "唯一"],
+  "max_numbers_per_bullet": 2,
+  "number_source_check": true,
+  "anonymize_clients": true,
+  "ai_script_phrase": "借助AI编写",
+  "style_notes": [
+    "书面语，可用“第一、第二”结构，不用引号堆砌、箭头、斜杠",
+    "每条要点末尾落到与岗位对应的结果，不写单独的感想句",
+    "中英文之间不留空格，数字用半角"
+  ]
+}

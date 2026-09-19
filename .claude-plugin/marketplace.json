@@ -1,0 +1,14 @@
+{
+  "name": "campus-apply",
+  "description": "国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。Campus-recruitment application skills for CN job sites.",
+  "owner": { "name": "Wenkai Qu" },
+  "plugins": [
+    {
+      "name": "campus-apply",
+      "description": "事实库驱动的改简历与网申填写，基于用户已登录的浏览器现场操作。",
+      "version": "0.1.0",
+      "source": "./",
+      "author": { "name": "Wenkai Qu" }
+    }
+  ]
+}
