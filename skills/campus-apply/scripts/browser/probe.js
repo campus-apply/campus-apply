@@ -62,7 +62,7 @@
     const secret = secretByText || secretByValue;
     // 页面明文写的字数要求（"200-1000 字""不超过 500 字"），和 maxlength 属性分开报，两者常常不一致
     const hintText = clean(wrap.innerText || '').replace(clean(val), '');
-    const hm = hintText.match(/(\d+)\s*[个]?字?\s*[-~至到]\s*(\d+)\s*[个]?字|(?:不超过|最多|限|以内)\s*(\d+)\s*[个]?字|(\d+)\s*[个]?字以内/);
+    const hm = hintText.match(/(\d+)\s*[个]?字?\s*[-~～–—至到]\s*(\d+)\s*[个]?字|(?:不超过|最多|限|以内)\s*(\d+)\s*[个]?字|(\d+)\s*[个]?字以内/);
     const hintLimit = hm ? (hm[1] ? { min: +hm[1], max: +hm[2] } : { max: +(hm[3] || hm[4]) }) : null;
     controls.push({ i: controls.length, heading: headingOf(box), label, kind: k, maxlength: el.getAttribute('maxlength'),
       required: !!(box.closest('.ant-form-item-required, [class*="required"]') || /\*/.test(label)),

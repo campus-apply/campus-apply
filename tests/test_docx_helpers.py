@@ -37,3 +37,29 @@ def test_rebuild_body_reorders(tmp_path):
     H.rebuild_body(d, [ps[2], ps[0]])
     out = tmp_path / 'o.docx'; d.save(out)
     assert [p.text for p in Document(out).paragraphs] == ['要点模板', '标题']
+
+
+def test_set_tabs_lands_before_run_properties_and_after_numbering_when_no_spacing():
+    d = make_doc(); p = d.paragraphs[1]
+    ppr = p._p.get_or_add_pPr()
+    for old in list(ppr):
+        ppr.remove(old)
+    from docx.oxml import OxmlElement
+    for tag in ('w:pStyle', 'w:numPr', 'w:ind', 'w:jc', 'w:rPr'):
+        ppr.append(OxmlElement(tag))
+    H.set_tabs(p)
+    tags = [c.tag.split('}')[1] for c in ppr]
+    assert tags.index('tabs') > tags.index('numPr') and tags.index('tabs') < tags.index('ind') < tags.index('rPr')
+
+
+def test_rebuild_body_keeps_section_properties_stored_in_last_paragraph():
+    d = make_doc()
+    body = d.element.body
+    sect = body.find(qn('w:sectPr'))
+    last = d.paragraphs[-1]._p
+    last.get_or_add_pPr().append(sect)          # 有些模板把 sectPr 挂在最后一段的 pPr 里
+    assert body.find(qn('w:sectPr')) is None
+    keep = [d.paragraphs[0], d.paragraphs[1]]
+    H.rebuild_body(d, keep)
+    assert body.find(qn('w:sectPr')) is not None
+    assert [x.text for x in d.paragraphs[:2]] == [keep[0].text, keep[1].text]

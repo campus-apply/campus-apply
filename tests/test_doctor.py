@@ -9,7 +9,7 @@ def env(**kw):
     """一台假机器：默认什么都齐全，按需拿掉。"""
     base = dict(platform='darwin', version=(3, 11, 4), modules={'docx', 'openpyxl', 'pypdf', 'docx2pdf'},
                 which={'git', 'pdfinfo'}, browser='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-                paths={'/Applications/Microsoft Word.app'}, python='/usr/bin/python3')
+                paths={'/Applications/Microsoft Word.app'}, python='/usr/bin/python3', free_gb=50, latest=None)
     base.update(kw)
     return doctor.Machine(**base)
 
@@ -28,7 +28,8 @@ def test_missing_pip_packages_get_one_install_command_with_this_python():
     rs = by_name(doctor.run_checks(env(modules={'openpyxl'})))
     assert not rs['python-docx'].ok and rs['python-docx'].required
     assert rs['python-docx'].fix == '/usr/bin/python3 -m pip install python-docx'
-    assert doctor.pip_command(doctor.run_checks(env(modules={'openpyxl'}, which={'git'}))) == '/usr/bin/python3 -m pip install python-docx pypdf'
+    m = env(modules={'openpyxl'}, which={'git'})
+    assert doctor.pip_command(doctor.run_checks(m), m) == '/usr/bin/python3 -m pip install python-docx pypdf'
 
 
 def test_pypdf_not_required_when_pdfinfo_present_and_docx2pdf_only_on_windows():
@@ -85,3 +86,25 @@ def test_pdftoppm_is_optional_with_platform_hint():
     rs = by_name(doctor.run_checks(env(platform='win32', which={'git'})))
     assert 'winget' in rs['pdftoppm'].fix or 'poppler' in rs['pdftoppm'].fix
     assert by_name(doctor.run_checks(env(which={'git', 'pdfinfo', 'pdftoppm'})))['pdftoppm'].ok
+
+
+def test_pdftoppm_hint_offers_pymupdf_as_pip_alternative():
+    rs = by_name(doctor.run_checks(env(which={'git'})))
+    assert 'pymupdf' in rs['pdftoppm'].fix
+
+
+def test_low_disk_space_is_an_optional_warning_not_a_failure():
+    rs = by_name(doctor.run_checks(env(free_gb=0.2)))
+    assert 'disk' in rs and not rs['disk'].ok and not rs['disk'].required and '1 GB' in rs['disk'].fix
+    assert doctor.exit_code(doctor.run_checks(env(free_gb=0.2))) == 0
+    assert by_name(doctor.run_checks(env(free_gb=50)))['disk'].ok
+
+
+def test_version_line_reports_local_version_and_update_hint_only_when_newer_exists():
+    rs = by_name(doctor.run_checks(env(latest='9.9.9')))
+    assert rs['version'].ok and '有新版 9.9.9' in rs['version'].detail and '/plugin marketplace update' in rs['version'].fix
+    rs = by_name(doctor.run_checks(env(latest=None)))          # 没网、超时、被墙：静默，只报本地版本
+    assert rs['version'].ok and '新版' not in rs['version'].detail and rs['version'].fix == ''
+    local = doctor.local_version()
+    rs = by_name(doctor.run_checks(env(latest=local)))
+    assert rs['version'].ok and '新版' not in rs['version'].detail

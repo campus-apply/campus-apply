@@ -3,7 +3,8 @@
 用法：python3 screen_render.py <岗位筛选.json> [--md 输出.md] [--xlsx 输出.xlsx] [--title 标题] [--print 档1,档2]
   --md     写 md：读过的岗位表 + 排除清单表；文件末尾留"## 问答与定稿"供追加，表格本身不手写
   --xlsx   写 xlsx："筛选"表按档排序着色，"未读"表只有列表页信息；链接可点、有筛选箭头
-  --print  把指定档位的行按 md 表打到标准输出，直接贴进对话，保证对话里的表和文件同列
+  --print  把指定档位的行按 md 表打到标准输出，直接贴进对话；默认只出精简列（档、岗位、单位/部门、地点、学历、专业匹配、理由、缺口），
+           --cols 列名1,列名2 可改成任意列（表头名），完整列只在 md / xlsx
 JSON 是列表，每项至少有 tier、title；基础列见 BASE，其余键按第一次出现的顺序追加成列，没有的格留空、整列空也保留。
 unread 为真的行进排除清单 / 未读表；以 _ 开头的键和 jobId、unread 不出列。"""
 import argparse, json, sys
@@ -24,6 +25,7 @@ HIDDEN = {'unread', 'jobId'}
 TIER_ORDER = {'建议投': 0, '可投但有缺口': 1, '不建议': 2}
 FILL = {'建议投': 'E2F0D9', '可投但有缺口': 'FFF2CC', '不建议': 'F2F2F2'}
 EXTRA_WIDTH = 14
+PRINT_COLS = ['档', '岗位', '单位/部门', '地点', '学历', '专业匹配', '理由', '缺口/剔除原因']   # 对话里贴的表：宽表贴进去没人看得清
 
 
 def columns(rows):
@@ -95,6 +97,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(usage=__doc__)
     ap.add_argument('src'); ap.add_argument('--md'); ap.add_argument('--xlsx'); ap.add_argument('--title', default='岗位筛选')
     ap.add_argument('--print', dest='tiers', help='按档打印 md 表到标准输出，如 建议投,可投但有缺口')
+    ap.add_argument('--cols', help='--print 时用的列，按表头名逗号分隔；不给就用精简列')
     if not (argv if argv is not None else sys.argv[1:]):
         print(__doc__); return 2
     a = ap.parse_args(argv)
@@ -109,8 +112,11 @@ def main(argv=None):
         print('xlsx', a.xlsx, n_read, 'read', n_unread, 'unread')
     if a.tiers:
         want = set(a.tiers.split(','))
+        names = a.cols.split(',') if a.cols else PRINT_COLS
+        by_name = {h: c for c in cols for h in (c[0], c[1])}
+        pcols = [by_name[n] for n in names if n in by_name]
         read, _ = split(rows)
-        print(md_table([r for r in read if r.get('tier') in want], cols))
+        print(md_table([r for r in read if r.get('tier') in want], pcols))
     return 0
 
 

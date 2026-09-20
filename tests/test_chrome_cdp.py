@@ -395,3 +395,27 @@ def test_stage_injection_does_not_wait_for_the_async_script_to_finish(cdp, tmp_p
     assert 'ERR_CDP' not in r.stdout and r.stdout.rstrip('\n') == 'DONE', r.stdout
     inject = next(i for i, e in enumerate(t.evaluated) if '(async' in e)
     assert t.await_flags[inject] is False
+
+
+def test_known_subcommand_with_wrong_arguments_prints_its_usage_not_unknown_command(cdp):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    r = run(cdp.port, '--mark', 'run1', 'click', 'js:[...document.querySelectorAll("a")].find(e', '=>', 'e.innerText)')
+    assert 'ERR_UNKNOWN_COMMAND' not in r.stdout
+    assert r.stdout.startswith('ERR_USAGE click') and '引号' in r.stdout and r.returncode == 2
+
+
+def test_claim_on_page_that_denies_storage_gives_a_clear_message(cdp):
+    t = cdp.add('bbb222', '隐私设置错误', 'chrome-error://chromewebdata/'); t.deny_storage = True
+    r = run(cdp.port, 'claim', '1', 'run1')
+    assert r.stdout.startswith('ERR_CLAIM') and '存储' in r.stdout and r.returncode == 1
+
+
+def test_screenshot_reports_write_failure_without_traceback(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
+    out = tmp_path / 'nodir.png'
+    out.parent.chmod(0o500)
+    try:
+        r = run(cdp.port, '--mark', 'run1', 'screenshot', str(out / 'x' / 'y.png'))
+    finally:
+        out.parent.chmod(0o700)
+    assert 'Traceback' not in r.stderr and r.stdout.startswith('ERR_WRITE') and r.returncode == 1

@@ -86,3 +86,9 @@ def test_limits_accept_min_max_objects_and_byte_units():
     assert any(s == '描述' and '超长' in m for s, m in errs)
     ok = cc.check("## 自我评价\n一二三四五六", RULES, FACTS, {'自我评价': {'min': 5, 'max': 8}})
     assert not [m for l, s, m in ok if l == 'ERR']
+
+
+def test_comment_lines_and_length_annotations_are_ignored_by_number_checks():
+    res = cc.check("## 实习\n<!-- 上限 1000 字，第 3 版，2 处待核 -->\n- 标题（约 300 字）\n- 分析 519 万次调用", RULES, FACTS)
+    assert not any('个数字' in m for l, m in levels(res) if l == 'WARN')
+    assert not any('找不到' in m and ('1000' in m or '300' in m) for l, m in levels(res) if l == 'WARN')

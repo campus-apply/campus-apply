@@ -8,7 +8,7 @@
 状态：OK 齐全；缺 必需项缺失；可选 可选项缺失（流程能走，某一步降级）。
 系统级的东西（Python、浏览器、Git、Word）脚本不代装，只给命令或链接。
 """
-import importlib.util, os, shutil, subprocess, sys
+import importlib.util, json, os, shutil, subprocess, sys, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, 'browser'))
@@ -23,14 +23,55 @@ WORD_PATHS = {
 }
 
 
+VERSION_FILE = os.path.join(HERE, '..', 'VERSION')
+RELEASES_API = 'https://api.github.com/repos/campus-apply/campus-apply/releases/latest'
+
+
+def local_version():
+    try:
+        return open(VERSION_FILE, encoding='utf-8').read().strip()
+    except OSError:
+        return '?'
+
+
+def latest_version(timeout=3):
+    """GitHub 上最新 release 的版本号；没网、超时、被拦、接口变了都返回 None，从不抛错。"""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(RELEASES_API, headers={'Accept': 'application/vnd.github+json'}), timeout=timeout) as r:
+            return json.loads(r.read().decode('utf-8')).get('tag_name', '').lstrip('v') or None
+    except Exception:
+        return None
+
+
+def newer(a, b):
+    """a 比 b 新？两边都是 x.y.z。"""
+    try:
+        return tuple(int(x) for x in a.split('.')) > tuple(int(x) for x in b.split('.'))
+    except ValueError:
+        return False
+
+
 class Machine:
     """检查所依赖的环境事实，可整体替换以便测试。"""
 
-    def __init__(self, platform=None, version=None, modules=None, which=None, browser='auto', paths=None, python=None):
+    def __init__(self, platform=None, version=None, modules=None, which=None, browser='auto', paths=None, python=None,
+                 free_gb='auto', latest='auto'):
         self.platform = platform or sys.platform
         self.version = version or tuple(sys.version_info[:3])
         self.python = python or sys.executable
         self._modules, self._which, self._browser, self._paths = modules, which, browser, paths
+        self._free_gb, self._latest = free_gb, latest
+
+    def free_gb(self):
+        if self._free_gb != 'auto':
+            return self._free_gb
+        try:
+            return shutil.disk_usage(os.getcwd()).free / 1e9
+        except OSError:
+            return None
+
+    def latest(self):
+        return latest_version() if self._latest == 'auto' else self._latest
 
     def has_module(self, name):
         if self._modules is not None:
@@ -87,29 +128,43 @@ def run_checks(m):
     fix = 'winget install Git.Git' if m.win else 'xcode-select --install 或 brew install git'
     rs.append(Result('git', m.has_cmd('git'), '只在从 GitHub 安装或更新插件时用到；没有它可以下载 zip 解压后按本地目录安装', '' if m.has_cmd('git') else fix, required=False))
     fix = 'winget install oschwartz10612.Poppler 后把其 bin 目录加进 PATH（或 https://github.com/oschwartz10612/poppler-windows/releases ）' if m.win else 'brew install poppler'
-    rs.append(Result('pdftoppm', m.has_cmd('pdftoppm'), '看图片型 PDF（扫描件、网申导出）时把页面转成图；没有就用 pypdf 抽图或请用户截图',
-                     '' if m.has_cmd('pdftoppm') else fix, required=False))
+    rs.append(Result('pdftoppm', m.has_cmd('pdftoppm'), '看图片型 PDF（扫描件、网申导出）和核对简历版面时把页面转成图；没有就用 pypdf 抽图或请用户截图',
+                     '' if m.has_cmd('pdftoppm') else f'{fix}；或 {m.python} -m pip install pymupdf（纯 pip，效果相同）', required=False))
     word = any(m.exists(p) for p in WORD_PATHS.get('win32' if m.win else 'darwin', []))
     rs.append(Result('word', word, '改简历时用 Word 导 PDF 核页数', '' if word else '没有 Word 就跳过核页数，改简历时会明确说"未核页数"', required=False))
+    free = m.free_gb()
+    if free is not None:
+        low = free < 1
+        rs.append(Result('disk', not low, f'当前盘剩余 {free:.1f} GB；截图、PDF、浏览器缓存都要占空间',
+                         '剩余不足 1 GB，先清出空间再开始（专用浏览器配置目录可以整个删）' if low else '', required=False))
+    local, latest = local_version(), m.latest()
+    if latest and newer(latest, local):
+        rs.append(Result('version', True, f'campus-apply {local}，有新版 {latest}',
+                         '更新：/plugin marketplace update campus-apply → /plugin update campus-apply@campus-apply → 你自己输 /reload-plugins；'
+                         '用 install.sh 装的重新拉仓库再跑一遍 install.sh'))
+    else:
+        rs.append(Result('version', True, f'campus-apply {local}'))
     return rs
 
 
-def pip_command(rs):
+def pip_missing(rs, m):
+    """缺的、能直接 pip 装的项：修复命令就是 <python> -m pip install <项目名>。"""
+    return [r for r in rs if not r.ok and r.fix == f'{m.python} -m pip install {r.name}']
+
+
+def pip_command(rs, m=None):
     """把缺的 pip 包合成一条安装命令，没有缺的返回空串。"""
-    missing = [r for r in rs if not r.ok and ' -m pip install ' in r.fix]
-    if not missing:
-        return ''
-    python = missing[0].fix.split(' -m pip install ')[0]
-    return f'{python} -m pip install ' + ' '.join(r.name for r in missing)
+    m = m or Machine()
+    missing = pip_missing(rs, m)
+    return f'{m.python} -m pip install ' + ' '.join(r.name for r in missing) if missing else ''
 
 
 def install_missing(rs, m):
     """只装缺的 pip 包，逐个装，返回失败的包名列表。"""
     failed = []
-    for r in rs:
-        if not r.ok and ' -m pip install ' in r.fix:
-            if subprocess.run([m.python, '-m', 'pip', 'install', r.name]).returncode != 0:
-                failed.append(r.name)
+    for r in pip_missing(rs, m):
+        if subprocess.run([m.python, '-m', 'pip', 'install', r.name]).returncode != 0:
+            failed.append(r.name)
     return failed
 
 
@@ -118,6 +173,9 @@ def exit_code(rs):
 
 
 def main(argv):
+    if any(a in ('-h', '--help') for a in argv):
+        print(__doc__)
+        return 0
     m = Machine()
     rs = run_checks(m)
     if '--install' in argv:
@@ -127,7 +185,7 @@ def main(argv):
         rs = run_checks(m)
     for r in rs:
         print(r.line())
-    cmd = pip_command(rs)
+    cmd = pip_command(rs, m)
     if cmd:
         print(f'# 一次装齐缺的包：{cmd}')
     return exit_code(rs)

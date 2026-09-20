@@ -227,7 +227,8 @@ def new_run_id():
 
 
 def claim_js(run_id):
-    return f"sessionStorage.setItem('__caClaim','{run_id}'); 'ok'"
+    """写认领标记；证书错误页、沙箱页这类不允许写存储的页面返回 'denied' 而不是抛异常。"""
+    return f"(function(){{try{{sessionStorage.setItem('__caClaim','{run_id}');return 'ok'}}catch(e){{return 'denied'}}}})()"
 
 
 def wait_loaded(tab, seconds=15):
@@ -249,11 +250,14 @@ def claim(target, run_id):
         print(f"ERR_CDP: 连不上标签页 {target.get('url', '')}")
         return 1
     try:
-        _, err = tab.evaluate(claim_js(run_id))
+        v, err = tab.evaluate(claim_js(run_id))
     finally:
         tab.close()
     if err:
         print(f'ERR_JS: {err}')
+        return 1
+    if v != 'ok':
+        print(f"ERR_CLAIM: 这一页不允许写存储（证书错误页、沙箱页或浏览器内部页），先处理这一页或换一页再认领：{target.get('url', '')}")
         return 1
     print(f"{run_id}\t{target.get('url', '')}")
     return 0
@@ -290,12 +294,15 @@ def cmd_open(url, run_id=None):
     try:
         wait_loaded(tab)
         time.sleep(1)  # 新标签页头几秒可能还是空白页，写了标记也没用
-        _, err = tab.evaluate(claim_js(run_id))
+        v, err = tab.evaluate(claim_js(run_id))
         url_now, _ = tab.evaluate('location.href')
     finally:
         tab.close()
     if err:
         print(f'ERR_JS: {err}')
+        return 1
+    if v != 'ok':
+        print(f'ERR_CLAIM: 这一页不允许写存储（证书错误页、沙箱页或浏览器内部页），先处理这一页再认领：{url_now or url}')
         return 1
     print(f"{run_id}\t{url_now or target.get('url', url)}")
     return 0
@@ -373,9 +380,13 @@ def cmd_screenshot(out_path):
     def go(tab):
         tab.call('Page.bringToFront')
         data = tab.call('Page.captureScreenshot', format='png')['data']
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        with open(out_path, 'wb') as f:
-            f.write(base64.b64decode(data))
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+            with open(out_path, 'wb') as f:
+                f.write(base64.b64decode(data))
+        except OSError as e:
+            print(f'ERR_WRITE: 截图没写成 {out_path}：{e.strerror or e}')
+            return 1
         print(out_path)
         return 0
     return with_tab(go)
@@ -571,6 +582,16 @@ def cmd_launch(url=None):
 
 
 OPTIONS = {'--mark': 'TAB_MARK', '--match': 'TAB_MATCH', '--port': 'CA_CDP_PORT', '--guard-every': 'GUARD_EVERY'}
+USAGE = {
+    'exec': 'exec <js文件>',
+    'claim': 'claim <序号|targetId> [运行ID]',
+    'open': 'open <URL> [运行ID]',
+    'screenshot': 'screenshot <输出.png>',
+    'click': 'click <选择器|js:表达式|x,y>（一个参数）',
+    'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
+    'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
+    'launch': 'launch [URL]',
+}
 
 
 def take_options(argv):
@@ -630,6 +651,11 @@ def main(argv):
         return cmd_read_urls(*args)
     if cmd == 'launch' and len(args) <= 1:
         return cmd_launch(*args)
+    if cmd in USAGE:
+        print(f'ERR_USAGE {cmd}：{USAGE[cmd]}')
+        if len(args) > 1:
+            print('参数里有空格时要整体加引号，例如 click "js:[...document.querySelectorAll(\'a\')].find(e => e.innerText === \'下一页\')"')
+        return 2
     print(f'ERR_UNKNOWN_COMMAND {cmd}')
     return 2
 

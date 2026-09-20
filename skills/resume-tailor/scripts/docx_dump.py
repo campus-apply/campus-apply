@@ -53,6 +53,10 @@ def dump(path, runs=False, raw=False):
 
 
 if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser(usage=__doc__)
+    ap.add_argument('docx'); ap.add_argument('--runs', action='store_true'); ap.add_argument('--raw', action='store_true')
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(2)
-    print(dump(sys.argv[1], '--runs' in sys.argv, '--raw' in sys.argv))
+    a = ap.parse_args()
+    print(dump(a.docx, a.runs, a.raw))

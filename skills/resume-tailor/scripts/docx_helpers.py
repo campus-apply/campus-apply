@@ -77,10 +77,14 @@ def set_tabs(p, mid=6000, right=10585):
     tabs = OxmlElement("w:tabs")
     for val, pos in (("left", mid), ("right", right)):
         t = OxmlElement("w:tab"); t.set(qn("w:val"), val); t.set(qn("w:pos"), str(pos)); tabs.append(t)
-    # w:tabs 应位于 pPr 中 spacing 之前（schema 顺序：... numPr, ..., tabs, ..., spacing, ind, ...）
-    spacing = ppr.find(qn("w:spacing"))
-    if spacing is not None:
-        spacing.addprevious(tabs)
+    # pPr 里子元素有固定顺序，w:tabs 放错位置 Word 会整个忽略：插在第一个"排在 tabs 之后"的元素前面
+    after_tabs = ('w:suppressAutoHyphens', 'w:kinsoku', 'w:wordWrap', 'w:overflowPunct', 'w:topLinePunct', 'w:autoSpaceDE', 'w:autoSpaceDN',
+                  'w:bidi', 'w:adjustRightInd', 'w:snapToGrid', 'w:spacing', 'w:ind', 'w:contextualSpacing', 'w:mirrorIndents',
+                  'w:suppressOverlap', 'w:jc', 'w:textDirection', 'w:textAlignment', 'w:textboxTightWrap', 'w:outlineLvl', 'w:divId',
+                  'w:cnfStyle', 'w:rPr', 'w:sectPr', 'w:pPrChange')
+    anchor = next((c for c in ppr if c.tag in {qn(t) for t in after_tabs}), None)
+    if anchor is not None:
+        anchor.addprevious(tabs)
     else:
         ppr.append(tabs)
     # 首行缩进去掉，改由制表位控制
@@ -147,12 +151,26 @@ def set_text(para, text, bold=None):
 
 
 def rebuild_body(doc, paragraphs):
-    """把正文按给定段落顺序重排（保留 sectPr）。paragraphs 是 Paragraph 对象列表，可含 deepcopy 出来的新段。"""
+    """把正文按给定段落顺序重排（保留 sectPr）。paragraphs 是 Paragraph 对象列表，可含 deepcopy 出来的新段。
+    页面设置可能挂在 body 末尾，也可能挂在最后一段的 pPr 里（那一段被删掉时页边距会回退成默认），两种都保住。"""
     body = doc.element.body
     sect = body.find(qn('w:sectPr'))
+    if sect is None:
+        for para in reversed(body.findall(qn('w:p'))):
+            ppr = para.find(qn('w:pPr'))
+            inner = ppr.find(qn('w:sectPr')) if ppr is not None else None
+            if inner is not None:
+                ppr.remove(inner)
+                body.append(inner)
+                sect = inner
+                break
     for child in list(body):
         if child is not sect:
             body.remove(child)
+    if sect is None:
+        for para in paragraphs:
+            body.append(para._p)
+        return
     for para in paragraphs:
         sect.addprevious(para._p)
 

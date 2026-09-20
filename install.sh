@@ -28,3 +28,5 @@ for d in "${dests[@]}"; do
     echo "$MODE: $dst"
   done
 done
+echo "campus-apply $(cat "$HERE/skills/campus-apply/VERSION")；更新时重新拉仓库再跑一遍本脚本。"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) echo "Windows 提示：终端先执行 chcp 65001，读 SKILL.md 时按 UTF-8，否则中文会乱码。";; esac

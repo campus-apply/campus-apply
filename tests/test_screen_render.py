@@ -36,10 +36,20 @@ def test_print_option_outputs_same_columns_for_chat(tmp_path):
     src = tmp_path / 's.json'; src.write_text(json.dumps(ROWS, ensure_ascii=False), encoding='utf-8')
     r = run(str(src), '--print', '建议投,可投但有缺口')
     lines = [l for l in r.stdout.splitlines() if l.startswith('|')]
-    assert lines[0].startswith('| 档 | 岗位 | 类别 |') and '招聘人数' in lines[0] and '届别' in lines[0]
+    assert lines[0].startswith('| 档 | 岗位 | 单位/部门 |') and '专业匹配' in lines[0]
     assert sum('乙岗' in l or '甲岗' in l for l in lines) == 2 and not any('丙岗' in l for l in lines)
 
 
 def test_missing_arguments_print_usage():
     r = run()
     assert r.returncode == 2 and '用法' in (r.stdout + r.stderr) and 'Traceback' not in r.stderr
+
+
+def test_print_defaults_to_compact_columns_and_cols_option_selects_others(tmp_path):
+    src = tmp_path / 's.json'; src.write_text(json.dumps(ROWS, ensure_ascii=False), encoding='utf-8')
+    r = run(str(src), '--print', '建议投,可投但有缺口')
+    header = [l for l in r.stdout.splitlines() if l.startswith('|')][0]
+    assert header == '| 档 | 岗位 | 单位/部门 | 地点 | 学历 | 专业匹配 | 理由 | 缺口/剔除原因 |'
+    r = run(str(src), '--print', '建议投', '--cols', '岗位,招聘人数,链接')
+    header = [l for l in r.stdout.splitlines() if l.startswith('|')][0]
+    assert header == '| 岗位 | 招聘人数 | 链接 |'

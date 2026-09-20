@@ -83,6 +83,10 @@ def render(md, out_path):
 
 
 if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser(usage=__doc__)
+    ap.add_argument('resume_md'); ap.add_argument('out_docx')
     if len(sys.argv) < 3:
         print(__doc__); sys.exit(2)
-    render(open(sys.argv[1], encoding='utf-8').read(), sys.argv[2])
+    a = ap.parse_args()
+    render(open(a.resume_md, encoding='utf-8').read(), a.out_docx)

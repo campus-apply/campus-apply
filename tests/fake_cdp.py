@@ -25,6 +25,7 @@ class FakeTab:
         self.slow_promise = False  # 模拟长时间不 resolve 的 Promise：awaitPromise=True 时拖 2.5 秒再回
         self.await_flags = []  # 每次 Runtime.evaluate 的 awaitPromise 值，供断言
         self.hang = False      # 模拟连上就不回话的标签页
+        self.deny_storage = False  # 模拟不允许写 sessionStorage 的页面（证书错误页、沙箱页）
 
     def info(self, port):
         return {'id': self.id, 'type': self.type, 'title': self.title, 'url': self.url,
@@ -135,6 +136,8 @@ class FakeCDP:
         if "sessionStorage.getItem('__caClaim')" in expr:
             return _val(rid, tab.mark or '')
         if "sessionStorage.setItem('__caClaim'," in expr:
+            if tab.deny_storage:
+                return _val(rid, 'denied')
             tab.mark = expr.split("sessionStorage.setItem('__caClaim','", 1)[1].split("'", 1)[0]
             return _val(rid, 'ok')
         if expr.strip() == 'document.readyState':

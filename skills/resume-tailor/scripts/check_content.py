@@ -14,6 +14,8 @@ YEAR = re.compile(r'(19|20)\d\d')
 LIST_PREFIX = re.compile(r'^\s*(?:[-*•·]\s*)?\d{1,2}[.、)]\s*')   # 行首的列表序号："3." "2、" "1)"
 YM = re.compile(r'((?:19|20)\d\d)\s*[-./年]\s*(\d{1,2})\s*月?')     # 2019.12 / 2019-12 / 2019 年 12 月
 QUOTED = re.compile(r'《[^》]*》|「[^」]*」|"[^"]*"')
+COMMENT = re.compile(r'<!--.*?-->', re.S)                                  # 文件里的说明注释不是正文
+LENGTH_NOTE = re.compile(r'[（(]\s*(?:约|不超过|≤)?\s*\d+\s*字\s*[)）]')   # "（约 300 字）"这类字数标注
 
 
 def split_sections(text):
@@ -51,6 +53,7 @@ def check(text, rules, facts_text, limits=None):
     out = []
     facts_norm = norm(norm_ym(facts_text))
     for name, body in split_sections(text):
+        body = LENGTH_NOTE.sub('', COMMENT.sub('', body))
         body_for_words = QUOTED.sub('', body) if rules.get('banned_words_exempt_in_quotes') else body  # 书名号、引号里的标题名可豁免
         for w in rules.get('banned_words', []):
             if w in body_for_words: out.append(('ERR', name, f'禁用词「{w}」'))
