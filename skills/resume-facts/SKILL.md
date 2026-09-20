@@ -1,6 +1,6 @@
 ---
 name: resume-facts
-description: 建立求职工作目录和带来源的个人经历事实库，并通过访谈确定口径、求职偏好与个人档案。Use when the user starts job hunting, wants to set up their fact base / resume workspace, or says 建事实库 / 初始化 / 整理经历 / 定口径 / 我想投什么.
+description: "建立求职工作目录和带来源的个人经历事实库，并通过访谈确定口径、求职偏好与个人档案。Use when the user starts job hunting, wants to set up their fact base / resume workspace, or says 建事实库 / 初始化 / 整理经历 / 定口径 / 我想投什么."
 ---
 
 # resume-facts：工作目录、事实库、口径、偏好

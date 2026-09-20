@@ -2,7 +2,7 @@
 
 国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。它在你自己登录的浏览器标签页里现场操作，不调站点接口，不替你提交。
 
-Campus-recruitment application skills for Chinese job sites, built for Claude Code; the skill package format also loads in Codex and DeepSeek Harness (see Requirements). Everything happens inside your own logged-in browser tab; it never submits on your behalf.
+Campus-recruitment application skills for Chinese job sites, for Claude Code, Codex, CodeBuddy Code and DeepSeek Harness (see Install). Everything happens inside your own logged-in browser tab; it never submits on your behalf.
 
 ## 它做什么，不做什么 / What it does and does not
 
@@ -28,21 +28,30 @@ Flow: facts once, then screen, tailor, fill. Skip screening when you already hav
 
 ## 安装 / Install
 
-Claude Code 三种装法，任选其一，装完新开一个会话就能看到五个 skill：
+需要 Claude Code、Codex、CodeBuddy Code 或 DeepSeek Harness 其中一个，macOS 和 Windows 都可以。最省事的是对你用的 agent 说一句"帮我安装 GitHub 上 campus-apply/campus-apply 这个 skill"，它会按下面对应的一段替你执行。装完新开一个会话就能看到五个 skill，先让它跑一下 `doctor.py`。
 
-1. 对 agent 说一句"帮我安装 GitHub 上 campus-apply/campus-apply 这个 Claude Code 插件"，它会替你执行下面两条命令。
-2. 自己在 Claude Code 里输入 `/plugin marketplace add campus-apply/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`。
+**Claude Code** 三种装法任选其一：
+
+1. 自己输入 `/plugin marketplace add campus-apply/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`。
+2. 让 agent 执行上面两条。
 3. 电脑上没有 Git（从 GitHub 安装要靠它）：到 [Releases](https://github.com/campus-apply/campus-apply/releases) 下载 zip 解压，`/plugin marketplace add <解压后的目录>`，再 `/plugin install campus-apply@campus-apply`；这一步也可以让 agent 做。
 
 更新：`/plugin marketplace update campus-apply` 再 `/plugin update campus-apply@campus-apply`，然后 `/reload-plugins` 或新开会话（对 agent 说"把 campus-apply 插件更新到最新版"也行，`/reload-plugins` 要你自己输）。`doctor.py` 末尾会报本地版本，能联网时有新版也会提一句；没网就只报本地版本。想自动更新，在 `/plugin` 的 Marketplaces 页对 campus-apply 开 auto-update；第三方 marketplace 默认不自动更新。用 zip 装的要重新下载解压覆盖再更新。
 
-其他 harness 或开发模式：
+**CodeBuddy Code**：插件机制和命令都与 Claude Code 相同，`/plugin marketplace add campus-apply/campus-apply` 再 `/plugin install campus-apply@campus-apply`（它兼容 `.claude-plugin/` 清单），更新也一样。不用插件的话，clone 仓库后运行 `./install.sh codebuddy`，装到它的用户级目录 `~/.codebuddy/skills`。
+
+**Codex**：clone 仓库后运行 `./install.sh codex`，装到 `$CODEX_HOME/skills`（默认 `~/.codex/skills`；主目录不是 `~/.codex` 就先 `export CODEX_HOME=<主目录>`）。它的沙箱默认不开网络、连不上本机调试端口，要在 `config.toml`（`$CODEX_HOME/config.toml`）的 `[sandbox_workspace_write]` 下加一行 `network_access = true`。更新时重新拉仓库再跑一遍脚本。
+
+**DeepSeek Harness**：clone 仓库后运行 `./install.sh agents`，装到它读取的 `~/.agents/skills`（也认 `~/.dsh/skills` 和项目里的 `.agents/skills`）。它没有 marketplace，"让 agent 装"就是让它 clone 仓库再跑这个脚本。更新时重新拉仓库再跑一遍脚本。
+
+开发模式（软链接到仓库，改动即时生效）：
 
 ```
-./install.sh claude   # 软链接到 ~/.claude/skills
-./install.sh codex    # ~/.codex/skills
-./install.sh agents   # ~/.agents/skills（DeepSeek Harness 等）
-./install.sh all      # 只装到已存在的目录；加 --copy 改为复制
+./install.sh claude      # ~/.claude/skills
+./install.sh codex       # $CODEX_HOME/skills
+./install.sh codebuddy   # ~/.codebuddy/skills
+./install.sh agents      # ~/.agents/skills（DeepSeek Harness）
+./install.sh all         # 只装到已存在的目录；加 --copy 改为复制
 ```
 
 ## 依赖与平台 / Requirements and platforms
@@ -51,9 +60,9 @@ Claude Code 三种装法，任选其一，装完新开一个会话就能看到�
 - 改简历导 PDF 需要 Microsoft Word：macOS 直接可用；Windows 再装 `pip install docx2pdf`。没有 Word 就跳过核页数。
 - 浏览器操作（筛岗、填表）通过 Chrome DevTools 协议，macOS 与 Windows 都可以：skill 会用专用配置目录启动一个带调试端口的 Chrome 或 Edge（`chrome_cdp.py launch`），和你日常的浏览器互不影响，第一次要在里面登录招聘站。也可以自己启动：macOS `open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=$HOME/campus-apply-chrome`，Windows `chrome.exe --remote-debugging-port=9222 --user-data-dir=%USERPROFILE%\campus-apply-chrome`（Edge 同参数）。这个专用配置目录存放招聘站的登录态和缓存，不在工作目录里，几百 MB，求职结束可以整个删掉。
 - Windows：按上面的装法安装即可；开发模式可在 Git Bash 里 `bash install.sh claude --copy`（Windows 建软链接需要管理员权限，直接复制更省事）。Python 命令通常是 `py`（`python` 可能是应用商店的占位程序，没有输出）；没装 Git for Windows 时 Claude Code 用 PowerShell 执行命令，skill 的命令都是普通的 `py … --mark …` 形式，两种 shell 都能跑。
-- Harness：Claude Code 与 Codex 都跑过从事实库到网申的全流程（Codex 到志愿页提交，简历录入页未填完）；DeepSeek Harness 只验证了目录格式。Codex 的沙箱默认不开网络、连不上本机调试端口，需在它的 `config.toml`（`$CODEX_HOME/config.toml`，默认 `~/.codex/config.toml`）加 `[sandbox_workspace_write]` 下的 `network_access = true`；Codex 主目录不是 `~/.codex` 时，先 `export CODEX_HOME=<主目录>` 再运行 `install.sh codex`。
+- Harness：Claude Code 与 Codex 都跑过从事实库到网申的全流程（Codex 到志愿页提交，简历录入页未填完）；CodeBuddy Code 2.95 上跑过安装、doctor、认领标签页、探测、guard 与 stage 注入，它的 Bash 沙箱默认不开，本机调试端口直接可达；DeepSeek Harness 0.1.5（预览版）上验证过安装与 skill 目录格式，它在 Web UI 里对话（`npx @deepseek-ai/dsh web`），要先在"设置 → 模型"里填 DeepSeek API key，默认权限模式是 workspace-write、沙箱只管文件不管网络，本机调试端口可达。Codex 的沙箱设置见安装一节。
 
-Browser automation (screening and form filling) drives Chrome or Edge over the DevTools protocol on macOS and Windows: the skill starts a separate browser profile with a debugging port (`chrome_cdp.py launch`); log in to the job site there once. That profile directory holds the job sites' login state and cache, lives outside your workspace and can be deleted when you are done. PDF export on Windows needs Word plus `docx2pdf`. The full flow is verified on Claude Code and on Codex (up to submitting the job choice; the online-resume pages were not completed there); DeepSeek Harness is only checked for package format. Codex's sandbox needs `network_access = true` under `[sandbox_workspace_write]` in its `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) to reach the local debugging port; set `CODEX_HOME` before `install.sh codex` if your Codex home is elsewhere.
+Browser automation (screening and form filling) drives Chrome or Edge over the DevTools protocol on macOS and Windows: the skill starts a separate browser profile with a debugging port (`chrome_cdp.py launch`); log in to the job site there once. That profile directory holds the job sites' login state and cache, lives outside your workspace and can be deleted when you are done. PDF export on Windows needs Word plus `docx2pdf`. The full flow is verified on Claude Code and on Codex (up to submitting the job choice; the online-resume pages were not completed there). On CodeBuddy Code 2.95 the install, doctor, tab claim, probe, guard and stage injection were exercised; its Bash sandbox is off by default, so the local debugging port is reachable. On DeepSeek Harness 0.1.5 (developer preview) the install and the skill package format were verified; it runs in a Web UI (`npx @deepseek-ai/dsh web`), needs a DeepSeek API key under Settings → Models, defaults to the workspace-write permission mode, and its sandbox confines files only, so the local debugging port is reachable. Codex's sandbox needs `network_access = true` under `[sandbox_workspace_write]` in its `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) to reach the local debugging port; set `CODEX_HOME` before `install.sh codex` if your Codex home is elsewhere.
 
 ## 工作目录 / Workspace
 

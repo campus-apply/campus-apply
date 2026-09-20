@@ -1,6 +1,6 @@
 ---
 name: job-screen
-description: 在一家公司的招聘官网上按用户偏好和硬要求筛岗位，产出带分档与排除原因的筛选表。Use when the user gives a company's campus-recruitment page and asks which positions fit; triggers: 筛岗位 / 看看哪些岗位适合我 / screen jobs.
+description: "在一家公司的招聘官网上按用户偏好和硬要求筛岗位，产出带分档与排除原因的筛选表。Use when the user gives a company's campus-recruitment page and asks which positions fit; triggers: 筛岗位 / 看看哪些岗位适合我 / screen jobs."
 ---
 
 # job-screen：在公司招聘页上筛岗位

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 用法：./install.sh [claude|codex|agents|all] [--copy] [--dry-run]
+# 用法：./install.sh [claude|codex|codebuddy|agents|all] [--copy] [--dry-run]
 #   claude → ~/.claude/skills   开发模式（正式安装用 Claude Code 里的 /plugin marketplace add <本目录>）
 #   codex  → $CODEX_HOME/skills（默认 ~/.codex/skills；Codex 用了别的主目录就先 export CODEX_HOME）
+#   codebuddy → ~/.codebuddy/skills   CodeBuddy Code 的用户级 skills 目录
 #   agents → ~/.agents/skills   DeepSeek Harness 等读这个目录
 # all 只装到已经存在的目录；指定单个目标时会创建目录。默认软链接，--copy 复制。
 set -euo pipefail
@@ -11,8 +12,9 @@ for a in "${@:2}"; do case "$a" in --copy) MODE="copy";; --dry-run) DRY=1;; esac
 case "$TARGET" in
   claude) dests=("$HOME/.claude/skills"); CREATE=1;;
   codex)  dests=("${CODEX_HOME:-$HOME/.codex}/skills");  CREATE=1;;
+  codebuddy) dests=("$HOME/.codebuddy/skills"); CREATE=1;;
   agents) dests=("$HOME/.agents/skills"); CREATE=1;;
-  all)    dests=("$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"); CREATE="";;
+  all)    dests=("$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.codebuddy/skills" "$HOME/.agents/skills"); CREATE="";;
   *) echo "unknown target: $TARGET" >&2; exit 2;;
 esac
 for d in "${dests[@]}"; do
