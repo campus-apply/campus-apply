@@ -1,16 +1,16 @@
 # campus-apply
 
-国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。它在你自己登录的浏览器标签页里现场操作，不调站点接口，不替你提交。
+国内校招网申全流程 skill：事实库、筛岗、改简历、填网申。它在你自己登录的浏览器标签页里现场操作，读岗位时复用页面自己发出的请求，不脱离浏览器，不替你提交。
 
-Campus-recruitment application skills for Chinese job sites, for Claude Code, Codex, CodeBuddy Code and DeepSeek Harness (see Install). Everything happens inside your own logged-in browser tab; it never submits on your behalf.
+Campus-recruitment application skills for Chinese job sites, for Claude Code, Codex, CodeBuddy Code and DeepSeek Harness (see Install). Everything happens inside your own logged-in browser tab (job listings are read by replaying the page's own requests, never from outside the browser); it never submits on your behalf.
 
 ## 它做什么，不做什么 / What it does and does not
 
 它做四件事：把你的经历、口径、求职偏好和个人档案整理成带来源的本地文件；在公司招聘页上按你的偏好筛岗，全量清单和每个岗位的硬要求先给你看；对照岗位描述（JD）在你现有的简历 docx 上原地改出一页，并写网申长文本和自述；陪你逐页走完网申，每页先说清哪些它填、哪些要你做，按节奏填并回读。
 
-它不做：批量投递、自动提交、解验证码、上传文件、填证件号和密码、调用招聘站点的接口、跨站抓取岗位。
+它不做：批量投递、自动提交、解验证码、填证件号和密码、在浏览器外调用招聘站点的接口或伪造请求参数、跨站抓取岗位。上传简历默认由你自己做，你明确说"帮我传"它才代传。
 
-It keeps a sourced fact base with your preferences, screens jobs on a company's own careers page (full list and each posting's hard requirements shown to you first), tailors your existing resume docx in place, writes application essays, and walks you through the form page by page, telling you what it will fill and what you must do yourself, reading each page back. It never mass-applies, submits, solves captchas, uploads files, touches ID or password fields, calls site APIs, or scrapes across sites.
+It keeps a sourced fact base with your preferences, screens jobs on a company's own careers page (full list and each posting's hard requirements shown to you first), tailors your existing resume docx in place, writes application essays, and walks you through the form page by page, telling you what it will fill and what you must do yourself, reading each page back. It never mass-applies, submits, solves captchas, touches ID or password fields, calls site APIs from outside the browser or forges request parameters, or scrapes across sites. You upload your resume yourself unless you explicitly ask it to.
 
 ## 五个 skill / Skills
 
@@ -18,7 +18,7 @@ It keeps a sourced fact base with your preferences, screens jobs on a company's 
 |---|---|
 | `campus-apply` | 入口：看工作目录状态，指到下一步；所有 skill 共用的边界和说话规矩 |
 | `resume-facts` | 初始化工作目录，建事实库，口径访谈、求职偏好访谈、个人档案访谈 |
-| `job-screen` | 在公司招聘页上列全量岗位、逐个读详情、出三档筛选表和排除清单，同时出一份 Excel |
+| `job-screen` | 在公司招聘页上列全量岗位、读每个岗位的详情（先看页面自己怎么取数据，能复用就复用，否则逐个读页面）、出三档筛选表和排除清单，同时出一份 Excel |
 | `resume-tailor` | 对照岗位出素材方案、写定稿文字、原地改 docx、写网申长文本与自述，写完过去 AI 味清单 |
 | `apply-fill` | 陪跑式填表：认领标签页、探测控件、逐页填写与回读、保存后核对、提交前比对预览 |
 
@@ -56,9 +56,10 @@ Flow: facts once, then screen, tailor, fill. Skip screening when you already hav
 - 改简历导 PDF 需要 Microsoft Word：macOS 直接可用；Windows 再装 `pip install docx2pdf`。没有 Word 就跳过核页数。
 - 浏览器操作（筛岗、填表）通过 Chrome DevTools 协议，macOS 与 Windows 都可以：skill 会用专用配置目录启动一个带调试端口的 Chrome 或 Edge（`chrome_cdp.py launch`），和你日常的浏览器互不影响，第一次要在里面登录招聘站。也可以自己启动：macOS `open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=$HOME/campus-apply-chrome`，Windows `chrome.exe --remote-debugging-port=9222 --user-data-dir=%USERPROFILE%\campus-apply-chrome`（Edge 同参数）。这个专用配置目录存放招聘站的登录态和缓存，不在工作目录里，几百 MB，求职结束可以整个删掉。
 - Windows：Claude Code、Codex、CodeBuddy Code 用插件装法即可；`install.sh` 的装法（DeepSeek Harness、开发模式）在 Git Bash 里运行 `bash install.sh <目标> --copy`（Windows 建软链接需要管理员权限，直接复制更省事）。Python 命令通常是 `py`（`python` 可能是应用商店的占位程序，没有输出）；没装 Git for Windows 时 Claude Code 用 PowerShell 执行命令，skill 的命令都是普通的 `py … --mark …` 形式，两种 shell 都能跑。
+- 用量：第一家公司最费——事实库一次性做完，筛岗要把每份 JD 读进上下文；之后事实库不用重做，筛岗仍是大头。省的办法：让它先读一部分岗位、看过摘要再补读；一家公司开一个新会话（执行清单和"待你决定"文件让新会话能接着做）；能复用页面自己请求的站点，读到的只有职责和要求，比整页省。
 - Harness：Claude Code 与 Codex 都跑过从事实库到网申的全流程（Codex 到志愿页提交，简历录入页未填完）；CodeBuddy Code 2.95 与 DeepSeek Harness 0.1.5（预览版）上都跑过安装、五个 skill 的载入、doctor、启动与认领标签页、探测、guard 和一次整页填写的 stage（在一个本地表单页上，两段经历写入后回读一致），尚未在这两个上走完带停顿的全流程。CodeBuddy 的 Bash 沙箱默认不开，本机调试端口直接可达。DeepSeek Harness 在 Web UI 里对话（`dsh web`，也有 `dsh --profile headless "<任务>"` 单次模式），要先在"设置 → 模型"里填 DeepSeek API key 或设置 `DEEPSEEK_API_KEY`；默认权限模式 workspace-write、沙箱只管文件不管网络，本机调试端口可达。Codex 的沙箱设置见安装一节。
 
-Browser automation (screening and form filling) drives Chrome or Edge over the DevTools protocol on macOS and Windows: the skill starts a separate browser profile with a debugging port (`chrome_cdp.py launch`); log in to the job site there once. That profile directory holds the job sites' login state and cache, lives outside your workspace and can be deleted when you are done. PDF export on Windows needs Word plus `docx2pdf`. The full flow is verified on Claude Code and on Codex (up to submitting the job choice; the online-resume pages were not completed there). On CodeBuddy Code 2.95 and DeepSeek Harness 0.1.5 (developer preview) the install, loading of all five skills, doctor, browser launch and tab claim, probe, guard and one full-page fill stage (two entries written and read back on a local form page) were exercised; the paused end-to-end flow has not been walked through on these two yet. CodeBuddy's Bash sandbox is off by default, so the local debugging port is reachable. DeepSeek Harness runs in a Web UI (`dsh web`; `dsh --profile headless "<task>"` runs one task), needs a DeepSeek API key under Settings → Models or in `DEEPSEEK_API_KEY`, defaults to the workspace-write permission mode, and its sandbox confines files only, so the local debugging port is reachable. Codex's sandbox needs `network_access = true` under `[sandbox_workspace_write]` in its `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) to reach the local debugging port; set `CODEX_HOME` before `install.sh codex` if your Codex home is elsewhere.
+Browser automation (screening and form filling) drives Chrome or Edge over the DevTools protocol on macOS and Windows: the skill starts a separate browser profile with a debugging port (`chrome_cdp.py launch`); log in to the job site there once. That profile directory holds the job sites' login state and cache, lives outside your workspace and can be deleted when you are done. PDF export on Windows needs Word plus `docx2pdf`. Usage-wise the first company costs the most (the fact base is built once; screening reads every job description into context); read a subset first, start a new session per company, and prefer sites where the page's own requests can be replayed. The full flow is verified on Claude Code and on Codex (up to submitting the job choice; the online-resume pages were not completed there). On CodeBuddy Code 2.95 and DeepSeek Harness 0.1.5 (developer preview) the install, loading of all five skills, doctor, browser launch and tab claim, probe, guard and one full-page fill stage (two entries written and read back on a local form page) were exercised; the paused end-to-end flow has not been walked through on these two yet. CodeBuddy's Bash sandbox is off by default, so the local debugging port is reachable. DeepSeek Harness runs in a Web UI (`dsh web`; `dsh --profile headless "<task>"` runs one task), needs a DeepSeek API key under Settings → Models or in `DEEPSEEK_API_KEY`, defaults to the workspace-write permission mode, and its sandbox confines files only, so the local debugging port is reachable. Codex's sandbox needs `network_access = true` under `[sandbox_workspace_write]` in its `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) to reach the local debugging port; set `CODEX_HOME` before `install.sh codex` if your Codex home is elsewhere.
 
 ## 工作目录 / Workspace
 

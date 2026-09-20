@@ -92,3 +92,17 @@ def test_comment_lines_and_length_annotations_are_ignored_by_number_checks():
     res = cc.check("## 实习\n<!-- 上限 1000 字，第 3 版，2 处待核 -->\n- 标题（约 300 字）\n- 分析 519 万次调用", RULES, FACTS)
     assert not any('个数字' in m for l, m in levels(res) if l == 'WARN')
     assert not any('找不到' in m and ('1000' in m or '300' in m) for l, m in levels(res) if l == 'WARN')
+
+
+def test_paragraph_lines_are_exempt_from_the_per_bullet_number_cap():
+    para = '在实习期间我分析了519万次调用，成功率从92%提升到95.6%，覆盖3个业务线、6个地区，' + '并持续跟进。' * 20
+    assert len(para) > cc.PARAGRAPH_MIN_CHARS
+    res = cc.check('## 自述\n' + para, RULES, FACTS)
+    assert not any('个数字（上限' in m for l, m in levels(res))
+    # 数字出处核对照常：3 与 6 是单个数字不查，其余都在事实库里
+    assert not any('找不到' in m for l, m in levels(res))
+
+
+def test_short_bullet_still_gets_the_number_cap():
+    res = cc.check('## 实习\n- 分析519万次调用，成功率92%到95.6%', RULES, FACTS)
+    assert any('个数字（上限' in m for l, m in levels(res))

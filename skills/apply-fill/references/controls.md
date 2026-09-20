@@ -5,6 +5,7 @@
 ## 文本写入的标准序列
 - 原型上的 value setter 赋值 → 派发 `input` → 派发 `change` → 派发 `FocusEvent('blur')` 和 `focusout`。受控组件常常只在失焦时才把值交给表单模型，不派发失焦事件的话显示值、字数统计全对，保存后却是空的。后台标签页里 `el.focus()` / `el.blur()` 不会触发焦点事件，所以事件要自己派发。
 - 写完读三层核对：显示值、DOM `value`、框架模型值（React 从元素的 `__reactFiber$…` 属性沿 `return` 往上找带 `memoizedProps.value` 的节点；Vue 看 `__vue__` 或 `__vueParentComponent`）。三层一致才算写进去。
+- 三层回读不过（尤其框架模型值是空的）就换 `chrome_cdp.py --mark <ID> type <选择器> <文本|@文件>`：真实鼠标点击取得焦点 → 全选 → 走浏览器自己的输入路径写入 → 补 input / change / blur / focusout → 回读。框架分不出这和人打字的区别。它比 setter 慢一点、每次一个字段，所以是兜底不是默认；哪个站哪类控件要它，记进站点笔记。
 
 ## 两种点法
 - 页面脚本里的 `el.click()` 是合成事件，多数控件认，但有的控件只认真实鼠标事件。脚本点了没反应、面板不出现，就换 `chrome_cdp.py --mark <ID> click <目标>`：它通过浏览器发真实鼠标事件，目标可以是 CSS 选择器、`js:` 表达式（求值得到元素，适合按文本找菜单项）或视口坐标。

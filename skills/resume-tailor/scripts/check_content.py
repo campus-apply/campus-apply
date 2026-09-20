@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """内容检查：禁用词、禁用符号、敏感词、不可证明的表述、每条数字个数、数字出处、分节字数上限。
 用法：python3 check_content.py <文本.md> --rules rules.json --facts 事实库.md [更多.md] [--limits limits.json]
-文本按 "## 节名" 分节；limits.json 每项是上限数字，或 {"min": 200, "max": 1000, "unit": "字"|"字节"}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。"""
+文本按 "## 节名" 分节；limits.json 每项是上限数字，或 {"min": 200, "max": 1000, "unit": "字"|"字节"}。输出 [ERR]/[WARN]/[OK]；有 ERR 退出码 1。
+"每条数字个数"只查简历要点那样的短行；超过 PARAGRAPH_MIN_CHARS 的行当成网申长文本的段落，不查这一项（数字出处照查）。"""
 import argparse, json, re, sys
 
 try:
@@ -15,6 +16,7 @@ LIST_PREFIX = re.compile(r'^\s*(?:[-*•·]\s*)?\d{1,2}[.、)]\s*')   # 行首�
 YM = re.compile(r'((?:19|20)\d\d)\s*[-./年]\s*(\d{1,2})\s*月?')     # 2019.12 / 2019-12 / 2019 年 12 月
 QUOTED = re.compile(r'《[^》]*》|「[^」]*」|"[^"]*"')
 COMMENT = re.compile(r'<!--.*?-->', re.S)                                  # 文件里的说明注释不是正文
+PARAGRAPH_MIN_CHARS = 160                                                  # 超过这个长度的行是段落，不按"每条"计数字
 LENGTH_NOTE = re.compile(r'[（(]\s*(?:约|不超过|≤)?\s*\d+\s*字\s*[)）]')   # "（约 300 字）"这类字数标注
 
 
@@ -66,7 +68,7 @@ def check(text, rules, facts_text, limits=None):
         maxn = rules.get('max_numbers_per_bullet')
         if maxn:
             for ln in body.splitlines():
-                if ln.strip() and not ln.startswith('#'):
+                if ln.strip() and not ln.startswith('#') and len(ln.strip()) <= PARAGRAPH_MIN_CHARS:
                     nums = [m for m in numbers_in(LIST_PREFIX.sub('', ln)) if not YEAR.fullmatch(norm(m))]
                     if len(nums) > maxn:
                         out.append(('WARN', name, f'一条里有{len(nums)}个数字（上限{maxn}）：{ln.strip()[:40]}'))

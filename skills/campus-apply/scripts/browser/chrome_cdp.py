@@ -15,13 +15,26 @@
   chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
         出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令每 2 秒轮询日志到 DONE / ERR / 超时（默认 90 秒）。
-  chrome_cdp.py --mark <运行ID> read-urls <列表文件> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N]
-        列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 --pace 秒（默认 1-2，登录后的页面建议 2-4），
+  chrome_cdp.py --mark <运行ID> read-urls <列表文件> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N] [--stop-file 文件]
+        列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 --pace 秒（默认 1-2；公开页建议 0.3-0.6，登录后的页面 0.8-1.5），
         用 read_page.js 读正文存 <输出目录>/<id>.json；每 --guard-every（默认 5）个跑一次 guard.js，遇验证码/跳登录打印 STOP 并停。
         页面 URL 不含 id 或正文太短打印 MISS <id>；结束打印 done 成功数/总数。
+        --stop-file：几个标签页并行读时给同一个文件；任何一个的 guard 报验证码/跳登录就写这个文件，其他进程读下一条前看到它就停（STOP stop-file）。
+  chrome_cdp.py --mark <运行ID> type <选择器|js:表达式> <文本|@文件>
+        往一个文本框里像人打字一样写入：发真实鼠标事件点它取得焦点 → 全选 → 用浏览器自己的输入路径（Input.insertText）写入文本
+        → 派发 input / change / blur / focusout → 回读。文本以 @ 开头就读那个文件的内容（长文本、含换行或引号时用）。
+        输出 typed <标签> <n>字 回读 <m>字 一致；不一致输出 ERR_TYPE 并退出 1。是原型 setter 写法三层回读不过时的兜底，不是默认写法。
+  chrome_cdp.py --mark <运行ID> upload <选择器> <文件路径>
+        把本地文件设到一个 <input type=file> 上（DOM.setFileInputFiles，浏览器原生路径，会触发 change），再回读 input.files 里的文件名。
+        只在用户明确同意由 agent 代传时用；默认仍由用户自己上传。
+  chrome_cdp.py --mark <运行ID> sniff <触发目标> [--wait 秒]
+        观察页面自己发出的请求：先在认领的标签页装上记录钩子（lib_net.js），再做一个触发动作，等 --wait 秒（默认 3），
+        打印这期间页面发出的 XHR / fetch：方法、地址、请求体、状态、响应类型、响应长度，然后一行 --- 和完整 JSON。
+        触发目标三种写法：CSS 选择器（发真实鼠标事件点它）；`x,y` 视口坐标；`js:<表达式>`（直接执行，例如调用页面自己的翻页函数）。
+        输出的第一行是 SNIFF <请求数>。哪些请求返回 JSON、JSON 里有没有岗位正文，由调用方看响应判断。
 
-选项可以放在子命令前后任意位置：--mark、--match、--port（调试端口，默认 9222）、--pace、--guard-every。
-同义的环境变量：TAB_MARK、TAB_MATCH、CA_CDP_PORT、PACE_MIN / PACE_MAX、GUARD_EVERY；命令行选项优先。
+选项可以放在子命令前后任意位置：--mark、--match、--port（调试端口，默认 9222）、--pace、--guard-every、--stop-file、--wait。
+同义的环境变量：TAB_MARK、TAB_MATCH、CA_CDP_PORT、PACE_MIN / PACE_MAX、GUARD_EVERY、STOP_FILE、SNIFF_WAIT；命令行选项优先。
 其他环境变量：CA_CDP_TIMEOUT 单个标签页应答超时秒数（默认 10）；CA_BROWSER 浏览器可执行文件路径（不设则按平台找 Chrome / Edge）；
   CA_CHROME_PROFILE 专用配置目录（默认 ~/campus-apply-chrome）。
 启动后第一次要在这个专用配置里重新登录招聘站；新版 Chrome 不允许在默认配置目录上开远程调试。
@@ -260,7 +273,16 @@ def claim(target, run_id):
         print(f"ERR_CLAIM: 这一页不允许写存储（证书错误页、沙箱页或浏览器内部页），先处理这一页或换一页再认领：{target.get('url', '')}")
         return 1
     print(f"{run_id}\t{target.get('url', '')}")
+    note_hint(target.get('url', ''))
     return 0
+
+
+def note_hint(url):
+    """工作目录里已有这个域名的站点笔记就多打印一行，让调用方先读。"""
+    host = urllib.parse.urlparse(url).hostname or ''
+    rel = os.path.join('site-notes', host + '.md')
+    if host and os.path.isfile(rel):
+        print('NOTE ' + rel.replace(os.sep, '/'))
 
 
 def cmd_claim(which, run_id=None):
@@ -305,6 +327,7 @@ def cmd_open(url, run_id=None):
         print(f'ERR_CLAIM: 这一页不允许写存储（证书错误页、沙箱页或浏览器内部页），先处理这一页再认领：{url_now or url}')
         return 1
     print(f"{run_id}\t{url_now or target.get('url', url)}")
+    note_hint(url_now or target.get('url', url))
     return 0
 
 
@@ -342,37 +365,159 @@ def mouse_click(tab, x, y):
     tab.call('Input.dispatchMouseEvent', type='mouseReleased', x=x, y=y, button='left', clickCount=1)
 
 
+def click_target(tab, target, js_is_element=True):
+    """点一个目标：`x,y` 坐标、CSS 选择器、或 js: 表达式（js_is_element 为真时表达式求值得到元素再点，否则直接执行）。
+    返回 (退出码, 说明行)。"""
+    m = re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*', target)
+    if m:
+        mouse_click(tab, float(m.group(1)), float(m.group(2)))
+        return 0, f'clicked {m.group(1)},{m.group(2)}'
+    if target.startswith('js:') and not js_is_element:
+        expr = target[3:]
+        _, err = tab.evaluate(expr)
+        return (1, f'ERR_JS: {err}') if err else (0, f'called {expr[:80]}')
+    expr = element_expr(target)
+    v, err = tab.evaluate(RECT_JS.format(expr=expr))
+    if err:
+        return 1, f'ERR_JS: {err}'
+    if not v:
+        return 1, f'NO_ELEMENT {target}'
+    r = json.loads(v)
+    for _ in range(8):  # 滚动或布局还在动时位置会变；连续两次测得同一位置才点，最多等约 2 秒
+        time.sleep(0.25)
+        v2, _ = tab.evaluate(RECT_JS.format(expr=expr))
+        r2 = json.loads(v2) if v2 else r
+        if (r2['x'], r2['y']) == (r['x'], r['y']):
+            break
+        r = r2
+    mouse_click(tab, r['x'], r['y'])
+    return 0, f"clicked {r['tag']} {r['x']:g},{r['y']:g}"
+
+
 def cmd_click(target):
     def go(tab):
-        m = re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*', target)
-        if m:
-            x, y = float(m.group(1)), float(m.group(2))
-            mouse_click(tab, x, y)
-            print(f'clicked {m.group(1)},{m.group(2)}')
-            return 0
-        if target.startswith('js:'):
-            expr = target[3:]
-        else:
-            sel = json.dumps(target)
-            expr = f'[...document.querySelectorAll({sel})].find(e => e.offsetParent !== null)'
-        v, err = tab.evaluate(RECT_JS.format(expr=expr))
+        code, msg = click_target(tab, target)
+        print(msg)
+        return code
+    return with_tab(go)
+
+
+def cmd_sniff(target):
+    """装上请求钩子 → 触发动作 → 等一会 → 打印页面这期间发出的请求。"""
+    wait = float(os.environ.get('SNIFF_WAIT', '3'))
+    with open(os.path.join(HERE, 'lib_net.js'), encoding='utf-8') as f:
+        lib = f.read()
+
+    def go(tab):
+        start, err = tab.evaluate(lib + '\n; window.__caNet.hook()')
         if err:
             print(f'ERR_JS: {err}')
             return 1
-        if not v:
-            print(f'NO_ELEMENT {target}')
-            return 1
-        r = json.loads(v)
-        for _ in range(8):  # 滚动或布局还在动时位置会变；连续两次测得同一位置才点，最多等约 2 秒
-            time.sleep(0.25)
-            v2, _ = tab.evaluate(RECT_JS.format(expr=expr))
-            r2 = json.loads(v2) if v2 else r
-            if (r2['x'], r2['y']) == (r['x'], r['y']):
+        start = int(start or 0)
+        code, msg = click_target(tab, target, js_is_element=False)
+        if code:
+            print(msg)
+            return code
+        read = f'JSON.stringify(window.__caNet.seen({start}))'
+        recs, stable, t0 = [], 0, time.time()
+        while True:
+            v, err = tab.evaluate(read)
+            if not err and v:
+                new = json.loads(v)
+                stable = stable + 1 if len(new) == len(recs) and new and all(r.get('done') for r in new) else 0
+                recs = new
+            elapsed = time.time() - t0
+            if elapsed >= wait or (stable >= 2 and elapsed >= 1):
                 break
-            r = r2
-        mouse_click(tab, r['x'], r['y'])
-        print(f"clicked {r['tag']} {r['x']:g},{r['y']:g}")
+            time.sleep(0.5)
+        print(f'SNIFF {len(recs)} 请求（触发：{msg}）')
+        for r in recs:
+            body = (r.get('body') or '').replace('\n', ' ')[:120]
+            print(f"{r.get('method')} {r.get('url')}" + (f'  请求体 {body}' if body else '')
+                  + f"  → {r.get('status', '…')} {r.get('respType') or ''} {r.get('respLen', 0)}字")
+        print('---')
+        print(json.dumps(recs, ensure_ascii=False, indent=1))
         return 0
+    return with_tab(go)
+
+
+TYPE_SELECT_JS = """(() => {{ const el = {expr}; if (!el) return null; window.__caTypeSelect = 1;
+  el.focus();
+  if (typeof el.select === 'function') el.select();
+  else if (el.isContentEditable) {{ const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }}
+  return el.tagName; }})()"""
+TYPE_READ_JS = """(() => {{ const el = {expr}; if (!el) return null; window.__caTypeRead = 1;
+  el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  el.dispatchEvent(new FocusEvent('blur'));
+  el.dispatchEvent(new FocusEvent('focusout', {{ bubbles: true }}));
+  return typeof el.value === 'string' ? el.value : (el.innerText || ''); }})()"""
+
+
+def element_expr(target):
+    """click / type 共用的目标写法：js: 表达式求值得到元素，否则是 CSS 选择器（取第一个可见匹配）。"""
+    if target.startswith('js:'):
+        return target[3:]
+    return f'[...document.querySelectorAll({json.dumps(target)})].find(e => e.offsetParent !== null)'
+
+
+def cmd_type(target, text):
+    if text.startswith('@'):
+        path = text[1:]
+        if not os.path.isfile(path):
+            print(f'ERR_NO_FILE {path}')
+            return 2
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+
+    def go(tab):
+        code, msg = click_target(tab, target)
+        if code:
+            print(msg)
+            return code
+        expr = element_expr(target)
+        tag, err = tab.evaluate(TYPE_SELECT_JS.format(expr=expr))
+        if err or not tag:
+            print(f'ERR_JS: {err}' if err else f'NO_ELEMENT {target}')
+            return 1
+        tab.call('Input.insertText', text=text)
+        v, err = tab.evaluate(TYPE_READ_JS.format(expr=expr))
+        if err:
+            print(f'ERR_JS: {err}')
+            return 1
+        v = v or ''
+        if v != text:
+            print(f'ERR_TYPE 回读 {len(v)}字 ≠ 输入 {len(text)}字：{v[:40]!r}')
+            return 1
+        print(f'typed {tag} {len(text)}字 回读 {len(v)}字 一致')
+        return 0
+    return with_tab(go)
+
+
+UPLOAD_READ_JS = """(() => {{ const el = document.querySelector({sel}); window.__caUploadRead = 1;
+  return JSON.stringify(el && el.files ? [...el.files].map(f => f.name) : []); }})()"""
+
+
+def cmd_upload(selector, path):
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        print(f'ERR_NO_FILE {path}')
+        return 2
+
+    def go(tab):
+        root = tab.call('DOM.getDocument')
+        node = tab.call('DOM.querySelector', nodeId=root['root']['nodeId'], selector=selector).get('nodeId', 0)
+        if not node:
+            print(f'NO_ELEMENT {selector}')
+            return 1
+        tab.call('DOM.setFileInputFiles', files=[path], nodeId=node)
+        v, err = tab.evaluate(UPLOAD_READ_JS.format(sel=json.dumps(selector)))
+        if err:
+            print(f'ERR_JS: {err}')
+            return 1
+        names = json.loads(v or '[]')
+        print(f"uploaded {os.path.basename(path)} → input.files {len(names)} 个：{'、'.join(names)}")
+        return 0 if names else 1
     return with_tab(go)
 
 
@@ -473,8 +618,12 @@ def cmd_read_urls(list_path, out_dir, start=1, end=999999):
     with open(list_path, encoding='utf-8') as f:
         rows = [ln.rstrip('\n').split('\t') for ln in f]
     rows = [r for r in rows[int(start) - 1:int(end)] if len(r) >= 2 and r[0]]
+    stop_file = os.environ.get('STOP_FILE', '')
     n = ok = 0
     for rid, url in rows:
+        if stop_file and os.path.exists(stop_file):
+            print(f'STOP stop-file {stop_file}')
+            break
         n += 1
         code, out = run_js(f"location.href='{url}'; 'nav'")
         if code:
@@ -508,6 +657,12 @@ def cmd_read_urls(list_path, out_dir, start=1, end=999999):
                 gd = {}
             print(f"  progress {n} guard captcha {gd.get('captcha')} login {gd.get('loginRedirect')}")
             if gd.get('captcha') or gd.get('loginRedirect'):
+                if stop_file:
+                    try:
+                        with open(stop_file, 'w', encoding='utf-8') as f:
+                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {os.environ.get('TAB_MARK', '')} {g}\n")
+                    except OSError:
+                        pass
                 print(f'STOP guard: {g}')
                 break
     print(f'done {ok}/{n}')
@@ -581,7 +736,8 @@ def cmd_launch(url=None):
     return 1
 
 
-OPTIONS = {'--mark': 'TAB_MARK', '--match': 'TAB_MATCH', '--port': 'CA_CDP_PORT', '--guard-every': 'GUARD_EVERY'}
+OPTIONS = {'--mark': 'TAB_MARK', '--match': 'TAB_MATCH', '--port': 'CA_CDP_PORT', '--guard-every': 'GUARD_EVERY',
+           '--stop-file': 'STOP_FILE', '--wait': 'SNIFF_WAIT'}
 USAGE = {
     'exec': 'exec <js文件>',
     'claim': 'claim <序号|targetId> [运行ID]',
@@ -590,12 +746,15 @@ USAGE = {
     'click': 'click <选择器|js:表达式|x,y>（一个参数）',
     'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
     'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
+    'sniff': 'sniff <选择器|js:表达式|x,y>（一个参数）[--wait 秒]',
+    'type': 'type <选择器|js:表达式> <文本|@文件>',
+    'upload': 'upload <选择器> <文件路径>',
     'launch': 'launch [URL]',
 }
 
 
 def take_options(argv):
-    """把 --mark/--match/--port/--pace/--guard-every 从任意位置摘出来写进环境变量，返回剩下的参数。"""
+    """把 --mark/--match/--port/--pace/--guard-every/--stop-file/--wait 从任意位置摘出来写进环境变量，返回剩下的参数。"""
     global PORT
     rest, i = [], 0
     while i < len(argv):
@@ -635,6 +794,12 @@ def main(argv):
         return cmd_screenshot(args[0])
     if cmd == 'click' and len(args) == 1:
         return cmd_click(args[0])
+    if cmd == 'sniff' and len(args) == 1:
+        return cmd_sniff(args[0])
+    if cmd == 'type' and len(args) == 2:
+        return cmd_type(*args)
+    if cmd == 'upload' and len(args) == 2:
+        return cmd_upload(*args)
     if cmd == 'stage' and args:
         libs, max_s, rest = [], 90, []
         i = 0

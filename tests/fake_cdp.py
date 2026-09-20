@@ -1,6 +1,7 @@
 """测试用的假 Chrome DevTools 端点：/json/version、/json/list、PUT /json/new 与每个标签页的 WebSocket。
 
-只实现 Runtime.evaluate、Page.bringToFront、Page.captureScreenshot 三个方法。
+实现 Runtime.evaluate、Page.bringToFront、Page.captureScreenshot、Input.dispatchMouseEvent / insertText / dispatchKeyEvent、
+DOM.getDocument / querySelector / setFileInputFiles；输入与 DOM 调用只记录参数供断言。
 Runtime.evaluate 不跑 JS，而是按表达式查表：
 - 含 `sessionStorage.getItem('__caClaim')` 的探测表达式 → 返回该标签页的 mark
 - 含 `sessionStorage.setItem('__caClaim','X')` 的认领表达式 → 记下 mark，返回 'ok'
@@ -22,6 +23,10 @@ class FakeTab:
         self.evaluated = []    # 收到过的表达式，供断言
         self.front = 0
         self.mouse = []        # 收到的 Input.dispatchMouseEvent 参数
+        self.inserted = []     # 收到的 Input.insertText 文本
+        self.keys = []         # 收到的 Input.dispatchKeyEvent 参数
+        self.dom_nodes = {}    # 选择器 → nodeId（DOM.querySelector 查表，没有返回 0）
+        self.files = []        # 收到的 DOM.setFileInputFiles 参数
         self.slow_promise = False  # 模拟长时间不 resolve 的 Promise：awaitPromise=True 时拖 2.5 秒再回
         self.await_flags = []  # 每次 Runtime.evaluate 的 awaitPromise 值，供断言
         self.hang = False      # 模拟连上就不回话的标签页
@@ -124,6 +129,19 @@ class FakeCDP:
             return {'id': rid, 'result': {'data': self.png}}
         if m == 'Input.dispatchMouseEvent':
             tab.mouse.append(p)
+            return {'id': rid, 'result': {}}
+        if m == 'Input.insertText':
+            tab.inserted.append(p.get('text', ''))
+            return {'id': rid, 'result': {}}
+        if m == 'Input.dispatchKeyEvent':
+            tab.keys.append(p)
+            return {'id': rid, 'result': {}}
+        if m == 'DOM.getDocument':
+            return {'id': rid, 'result': {'root': {'nodeId': 1}}}
+        if m == 'DOM.querySelector':
+            return {'id': rid, 'result': {'nodeId': tab.dom_nodes.get(p.get('selector'), 0)}}
+        if m == 'DOM.setFileInputFiles':
+            tab.files.append(p)
             return {'id': rid, 'result': {}}
         if m != 'Runtime.evaluate':
             return {'id': rid, 'error': {'code': -32601, 'message': f"'{m}' wasn't found"}}

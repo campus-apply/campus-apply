@@ -419,3 +419,187 @@ def test_screenshot_reports_write_failure_without_traceback(cdp, tmp_path):
     finally:
         out.parent.chmod(0o700)
     assert 'Traceback' not in r.stderr and r.stdout.startswith('ERR_WRITE') and r.returncode == 1
+
+
+def _sniff_tab(cdp, records):
+    """模拟一个装了请求钩子的标签页：装钩子返回起始序号，触发动作返回 'nav'，读记录返回 records。"""
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/list'); t.mark = 'run1'
+    state = {'hooked': 0, 'triggered': 0}
+
+    def responder(expr):
+        if 'window.__caNet.hook()' in expr:
+            state['hooked'] += 1
+            return 0
+        if expr.startswith('JSON.stringify(window.__caNet.seen('):
+            return json.dumps(records)
+        if 'turnPage(' in expr:
+            state['triggered'] += 1
+            return 'nav'
+        return NotImplemented
+    t.responder = responder
+    return t, state
+
+
+def test_sniff_hooks_triggers_then_prints_summary_and_json(cdp, tmp_path):
+    rec = [{'kind': 'xhr', 'method': 'POST', 'url': 'https://jobs.example.com/api/list', 'body': '{"PageIndex":2}',
+            'status': 200, 'respType': 'application/json; charset=utf-8', 'resp': '{"Count":914,"Data":[{"Duty":"x"}]}', 'respLen': 15463}]
+    t, state = _sniff_tab(cdp, rec)
+    r = run(cdp.port, 'sniff', 'js:turnPage(2)', '--wait', '0', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert state['hooked'] == 1 and state['triggered'] == 1
+    lines = r.stdout.rstrip('\n').split('\n')
+    assert lines[0].startswith('SNIFF 1'), lines[0]
+    assert 'POST https://jobs.example.com/api/list' in lines[1] and 'application/json' in lines[1] and '15463' in lines[1]
+    body = json.loads(r.stdout.split('---\n', 1)[1])
+    assert body[0]['body'] == '{"PageIndex":2}' and body[0]['resp'].startswith('{"Count":914')
+    # 钩子装在触发动作之前
+    hook_i = next(i for i, e in enumerate(t.evaluated) if 'window.__caNet.hook()' in e)
+    trig_i = next(i for i, e in enumerate(t.evaluated) if 'turnPage(' in e)
+    assert hook_i < trig_i
+
+
+def test_sniff_reports_no_requests_when_page_sent_nothing(cdp):
+    _sniff_tab(cdp, [])
+    r = run(cdp.port, 'sniff', 'js:turnPage(2)', '--wait', '0', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0 and r.stdout.startswith('SNIFF 0')
+
+
+def test_sniff_can_trigger_by_clicking_a_selector(cdp):
+    t, state = _sniff_tab(cdp, [])
+    t.answers[RECT_FOR('a.next')] = json.dumps({'x': 10, 'y': 20, 'tag': 'A'})
+    r = run(cdp.port, 'sniff', 'a.next', '--wait', '0', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert t.mouse and t.mouse[1]['type'] == 'mousePressed' and t.mouse[1]['x'] == 10
+
+
+def RECT_FOR(selector):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('chrome_cdp', SCRIPT)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod.RECT_JS.format(expr=f'[...document.querySelectorAll({json.dumps(selector)})].find(e => e.offsetParent !== null)')
+
+
+def test_sniff_usage_error_without_target(cdp):
+    r = run(cdp.port, 'sniff', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 2 and r.stdout.startswith('ERR_USAGE sniff')
+
+
+def test_read_urls_guard_hit_writes_stop_file_and_other_runs_stop_before_reading(cdp, tmp_path):
+    texts = {f'https://x/job/j{i}': '岗位描述' * 100 for i in range(1, 5)}
+    _, state = _read_urls_tab(cdp, texts, captcha_at=1)
+    lst = tmp_path / 'list.tsv'
+    lst.write_text(''.join(f'j{i}\thttps://x/job/j{i}\n' for i in range(1, 5)), encoding='utf-8')
+    stop = tmp_path / 'stop.txt'
+    r = run(cdp.port, 'read-urls', str(lst), str(tmp_path / 'out'), '--stop-file', str(stop),
+            env={'TAB_MARK': 'run1', 'PACE_MIN': '0', 'PACE_MAX': '0', 'GUARD_EVERY': '2'})
+    assert 'STOP guard' in r.stdout and stop.exists() and 'captcha' in stop.read_text(encoding='utf-8')
+    # 第二个进程（模拟并行的另一个标签页）开始前看到停止文件，一页都不读
+    r2 = run(cdp.port, 'read-urls', str(lst), str(tmp_path / 'out2'), '3', '4', '--stop-file', str(stop),
+             env={'TAB_MARK': 'run1', 'PACE_MIN': '0', 'PACE_MAX': '0'})
+    assert r2.stdout.startswith('STOP stop-file') and not (tmp_path / 'out2').exists() or not list((tmp_path / 'out2').glob('*.json'))
+
+
+def test_read_urls_without_stop_file_option_behaves_as_before(cdp, tmp_path):
+    texts = {'https://x/job/j1': '岗位描述' * 100}
+    _read_urls_tab(cdp, texts)
+    lst = tmp_path / 'list.tsv'
+    lst.write_text('j1\thttps://x/job/j1\n', encoding='utf-8')
+    r = run(cdp.port, 'read-urls', str(lst), str(tmp_path / 'out'), env={'TAB_MARK': 'run1', 'PACE_MIN': '0', 'PACE_MAX': '0'})
+    assert r.stdout.rstrip('\n').endswith('done 1/1') and not list(tmp_path.glob('stop*'))
+
+
+def test_claim_and_open_mention_existing_site_notes_for_the_host(cdp, tmp_path):
+    cdp.add('aaa111', 'Jobs', 'https://jobs.example.com/list')
+    (tmp_path / 'site-notes').mkdir()
+    (tmp_path / 'site-notes' / 'jobs.example.com.md').write_text('# 站点笔记', encoding='utf-8')
+    r = run(cdp.port, 'claim', '1', 'run9', cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    lines = r.stdout.rstrip('\n').split('\n')
+    assert lines[0] == 'run9\thttps://jobs.example.com/list'
+    assert lines[1] == 'NOTE site-notes/jobs.example.com.md'
+    r = run(cdp.port, 'open', 'https://jobs.example.com/other', 'run10', cwd=str(tmp_path))
+    assert 'NOTE site-notes/jobs.example.com.md' in r.stdout
+    # 没有笔记就不多打印
+    r = run(cdp.port, 'claim', '1', 'run11', cwd=str(tmp_path / 'site-notes'))
+    assert r.stdout.rstrip('\n').split('\n') == ['run11\thttps://jobs.example.com/list']
+
+
+def test_usage_lists_sniff_and_stop_file():
+    r = subprocess.run([sys.executable, SCRIPT, '--help'], capture_output=True, text=True)
+    assert 'sniff <' in r.stdout and '--stop-file' in r.stdout and '--wait' in r.stdout
+
+
+def _type_tab(cdp, selector, final_value):
+    """模拟一个文本框：点击定位用 RECT_FOR；选中/派发事件/回读三段 JS 按关键字应答；回读返回 final_value。"""
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/form'); t.mark = 'run1'
+    t.answers[RECT_FOR(selector)] = json.dumps({'x': 30, 'y': 40, 'tag': 'TEXTAREA'})
+    calls = []
+
+    def responder(expr):
+        if '__caTypeSelect' in expr:
+            calls.append('select'); return 'TEXTAREA'
+        if '__caTypeRead' in expr:
+            calls.append('read'); return final_value
+        return NotImplemented
+    t.responder = responder
+    return t, calls
+
+
+def test_type_clicks_selects_inserts_text_then_fires_events_and_reads_back(cdp):
+    t, calls = _type_tab(cdp, 'textarea.desc', '负责供应链计划')
+    r = run(cdp.port, 'type', 'textarea.desc', '负责供应链计划', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert t.mouse and t.mouse[1]['type'] == 'mousePressed' and t.mouse[1]['x'] == 30
+    assert t.inserted == ['负责供应链计划']
+    assert calls == ['select', 'read']
+    # 顺序：点击 → 全选 → insertText → 派发事件并回读
+    assert r.stdout.strip() == 'typed TEXTAREA 7字 回读 7字 一致'
+
+
+def test_type_reports_mismatch_when_readback_differs(cdp):
+    _type_tab(cdp, 'textarea.desc', '负责供应')
+    r = run(cdp.port, 'type', 'textarea.desc', '负责供应链计划', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 1 and r.stdout.startswith('ERR_TYPE 回读 4字 ≠ 输入 7字')
+
+
+def test_type_reads_long_text_from_file_with_at_prefix(cdp, tmp_path):
+    long = '第一段。\n第二段，含数字 2024。'
+    f = tmp_path / 'text.txt'
+    f.write_text(long, encoding='utf-8')
+    t, _ = _type_tab(cdp, 'textarea.desc', long)
+    r = run(cdp.port, 'type', 'textarea.desc', '@' + str(f), env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0, r.stdout
+    assert t.inserted == [long]
+
+
+def test_type_no_element_reports_and_inserts_nothing(cdp):
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/form'); t.mark = 'run1'
+    t.answers[RECT_FOR('textarea.none')] = None
+    r = run(cdp.port, 'type', 'textarea.none', 'x', env={'TAB_MARK': 'run1'})
+    assert r.returncode == 1 and r.stdout.startswith('NO_ELEMENT') and t.inserted == []
+
+
+def test_upload_sets_file_on_input_and_reads_back_names(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/form'); t.mark = 'run1'
+    t.dom_nodes['input[type=file]'] = 42
+    t.responder = lambda expr: json.dumps(['简历.pdf']) if '__caUploadRead' in expr else NotImplemented
+    pdf = tmp_path / '简历.pdf'
+    pdf.write_bytes(b'%PDF-1.4 fake')
+    r = run(cdp.port, 'upload', 'input[type=file]', str(pdf), env={'TAB_MARK': 'run1'})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert t.files == [{'files': [str(pdf)], 'nodeId': 42}]
+    assert r.stdout.strip() == 'uploaded 简历.pdf → input.files 1 个：简历.pdf'
+
+
+def test_upload_refuses_missing_file_and_missing_element(cdp, tmp_path):
+    t = cdp.add('bbb222', 'b', 'https://jobs.example.com/form'); t.mark = 'run1'
+    r = run(cdp.port, 'upload', 'input[type=file]', str(tmp_path / 'nope.pdf'), env={'TAB_MARK': 'run1'})
+    assert r.returncode == 2 and r.stdout.startswith('ERR_NO_FILE') and t.files == []
+    pdf = tmp_path / 'a.pdf'; pdf.write_bytes(b'x')
+    r = run(cdp.port, 'upload', 'input.none', str(pdf), env={'TAB_MARK': 'run1'})
+    assert r.returncode == 1 and r.stdout.startswith('NO_ELEMENT') and t.files == []
+
+
+def test_usage_lists_type_and_upload():
+    r = subprocess.run([sys.executable, SCRIPT, '--help'], capture_output=True, text=True)
+    assert 'type <' in r.stdout and 'upload <' in r.stdout
