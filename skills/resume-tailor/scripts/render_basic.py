@@ -86,6 +86,8 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(usage=__doc__)
     ap.add_argument('resume_md'); ap.add_argument('out_docx')
+    if any(x in ('-h', '--help') for x in sys.argv[1:]):
+        print(__doc__); sys.exit(0)
     if len(sys.argv) < 3:
         print(__doc__); sys.exit(2)
     a = ap.parse_args()

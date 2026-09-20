@@ -32,12 +32,32 @@ def test_missing_pip_packages_get_one_install_command_with_this_python():
     assert doctor.pip_command(doctor.run_checks(m), m) == '/usr/bin/python3 -m pip install python-docx pypdf'
 
 
-def test_pypdf_not_required_when_pdfinfo_present_and_docx2pdf_only_on_windows():
-    rs = by_name(doctor.run_checks(env(modules={'docx', 'openpyxl'}, which={'git', 'pdfinfo'})))
-    assert rs['pypdf'].ok and 'pdfinfo' in rs['pypdf'].detail
+def test_pypdf_not_required_when_pdftotext_present_and_docx2pdf_only_on_windows():
+    rs = by_name(doctor.run_checks(env(modules={'docx', 'openpyxl'}, which={'git', 'pdftotext'})))
+    assert rs['pypdf'].ok and 'pdftotext' in rs['pypdf'].detail
     assert 'docx2pdf' not in rs
     rs = by_name(doctor.run_checks(env(platform='win32', modules={'docx', 'openpyxl', 'pypdf'}, which={'git'})))
     assert not rs['docx2pdf'].ok and not rs['docx2pdf'].required
+
+
+def test_pdfinfo_alone_does_not_replace_pypdf_because_facts_need_pdf_text():
+    m = env(modules={'docx', 'openpyxl'}, which={'git', 'pdfinfo'})
+    rs = by_name(doctor.run_checks(m))
+    assert not rs['pypdf'].ok and rs['pypdf'].required
+    assert rs['pypdf'].fix == '/usr/bin/python3 -m pip install pypdf'
+    assert '正文' in rs['pypdf'].detail
+
+
+def test_install_rechecks_in_a_fresh_process(monkeypatch, capsys):
+    """刚 pip 装的包在同一个进程里探测不到（导入缓存、启动时不存在的 site 目录），所以装完必须换个进程再查。"""
+    m = env(modules={'openpyxl'})
+    calls = []
+    monkeypatch.setattr(doctor, 'Machine', lambda: m)
+    monkeypatch.setattr(doctor, 'install_missing', lambda rs, mm: calls.append(('install', [r.name for r in doctor.pip_missing(rs, mm)])) or [])
+    monkeypatch.setattr(doctor, 'recheck_in_fresh_process', lambda python: calls.append(('recheck', python)) or 0)
+    assert doctor.main(['--install']) == 0
+    assert calls == [('install', ['python-docx', 'pypdf']), ('recheck', '/usr/bin/python3')]
+    assert '缺' not in capsys.readouterr().out
 
 
 def test_old_python_is_flagged_with_platform_specific_fix():
@@ -102,7 +122,7 @@ def test_low_disk_space_is_an_optional_warning_not_a_failure():
 
 def test_version_line_reports_local_version_and_update_hint_only_when_newer_exists():
     rs = by_name(doctor.run_checks(env(latest='9.9.9')))
-    assert rs['version'].ok and '有新版 9.9.9' in rs['version'].detail and '/plugin marketplace update' in rs['version'].fix
+    assert rs['version'].ok and '有新版 9.9.9' in rs['version'].detail and '/plugin marketplace update' in rs['version'].fix and 'codex plugin marketplace upgrade' in rs['version'].fix
     rs = by_name(doctor.run_checks(env(latest=None)))          # 没网、超时、被墙：静默，只报本地版本
     assert rs['version'].ok and '新版' not in rs['version'].detail and rs['version'].fix == ''
     local = doctor.local_version()

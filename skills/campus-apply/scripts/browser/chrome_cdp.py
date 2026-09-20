@@ -615,6 +615,9 @@ def take_options(argv):
 
 
 def main(argv):
+    if any(a in ('-h', '--help') for a in argv):
+        print(__doc__)
+        return 0
     argv = take_options(argv)
     if not argv:
         print(__doc__)

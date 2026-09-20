@@ -3,7 +3,8 @@
 
 用法：
   doctor.py            逐项检查，每行：状态<TAB>项目<TAB>说明<TAB>修复命令；必需项有缺退出码 1
-  doctor.py --install  先检查，再用当前 Python 安装缺的 pip 包（只装缺的），装完重新检查
+  doctor.py --install  先检查，再用当前 Python 安装缺的 pip 包（只装缺的），装完换一个新进程重新检查
+                       （刚装的包在原进程里探测不到：导入缓存和启动时不存在的 site 目录）
 
 状态：OK 齐全；缺 必需项缺失；可选 可选项缺失（流程能走，某一步降级）。
 系统级的东西（Python、浏览器、Git、Word）脚本不代装，只给命令或链接。
@@ -14,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, 'browser'))
 
 PACKAGES = [('python-docx', 'docx', '改简历：读写 docx'), ('openpyxl', 'openpyxl', '筛岗：生成 Excel'),
-            ('pypdf', 'pypdf', '改简历：核 PDF 页数'), ('docx2pdf', 'docx2pdf', '改简历：Windows 上用 Word 导 PDF')]
+            ('pypdf', 'pypdf', '读 PDF 正文（事实库材料）与核 PDF 页数'), ('docx2pdf', 'docx2pdf', '改简历：Windows 上用 Word 导 PDF')]
 
 WORD_PATHS = {
     'darwin': ['/Applications/Microsoft Word.app'],
@@ -117,8 +118,8 @@ def run_checks(m):
         if pip_name == 'docx2pdf' and not m.win:
             continue  # macOS 用 Word 自己导 PDF，不需要它
         ok = m.has_module(mod)
-        if pip_name == 'pypdf' and not ok and m.has_cmd('pdfinfo'):
-            rs.append(Result('pypdf', True, '没装 pypdf，但有 pdfinfo 可以核页数'))
+        if pip_name == 'pypdf' and not ok and m.has_cmd('pdftotext'):
+            rs.append(Result('pypdf', True, '没装 pypdf，但有 pdftotext 可以读 PDF 正文和核页数'))
             continue
         required = pip_name != 'docx2pdf'
         rs.append(Result(pip_name, ok, why, '' if ok else f'{m.python} -m pip install {pip_name}', required))
@@ -141,6 +142,7 @@ def run_checks(m):
     if latest and newer(latest, local):
         rs.append(Result('version', True, f'campus-apply {local}，有新版 {latest}',
                          '更新：/plugin marketplace update campus-apply → /plugin update campus-apply@campus-apply → 你自己输 /reload-plugins；'
+                         'Codex 是 codex plugin marketplace upgrade campus-apply → codex plugin add campus-apply@campus-apply；'
                          '用 install.sh 装的重新拉仓库再跑一遍 install.sh'))
     else:
         rs.append(Result('version', True, f'campus-apply {local}'))
@@ -172,6 +174,11 @@ def exit_code(rs):
     return 1 if any(r.required and not r.ok for r in rs) else 0
 
 
+def recheck_in_fresh_process(python):
+    """装完后在新进程里重新检查并输出，返回它的退出码。"""
+    return subprocess.run([python, os.path.abspath(__file__)]).returncode
+
+
 def main(argv):
     if any(a in ('-h', '--help') for a in argv):
         print(__doc__)
@@ -182,7 +189,7 @@ def main(argv):
         failed = install_missing(rs, m)
         if failed:
             print('# 安装失败：' + ' '.join(failed))
-        rs = run_checks(m)
+        return recheck_in_fresh_process(m.python)
     for r in rs:
         print(r.line())
     cmd = pip_command(rs, m)
