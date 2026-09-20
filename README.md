@@ -30,9 +30,9 @@ Flow: facts once, then screen, tailor, fill. Skip screening when you already hav
 
 Claude Code 三种装法，任选其一，装完新开一个会话就能看到五个 skill：
 
-1. 对 agent 说一句"帮我安装 GitHub 上 wenkaiqu014-hue/campus-apply 这个 Claude Code 插件"，它会替你执行下面两条命令。
-2. 自己在 Claude Code 里输入 `/plugin marketplace add wenkaiqu014-hue/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`。
-3. 电脑上没有 Git（从 GitHub 安装要靠它）：到 [Releases](https://github.com/wenkaiqu014-hue/campus-apply/releases) 下载 zip 解压，`/plugin marketplace add <解压后的目录>`，再 `/plugin install campus-apply@campus-apply`；这一步也可以让 agent 做。
+1. 对 agent 说一句"帮我安装 GitHub 上 campus-apply/campus-apply 这个 Claude Code 插件"，它会替你执行下面两条命令。
+2. 自己在 Claude Code 里输入 `/plugin marketplace add campus-apply/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`。
+3. 电脑上没有 Git（从 GitHub 安装要靠它）：到 [Releases](https://github.com/campus-apply/campus-apply/releases) 下载 zip 解压，`/plugin marketplace add <解压后的目录>`，再 `/plugin install campus-apply@campus-apply`；这一步也可以让 agent 做。
 
 更新：`/plugin marketplace update campus-apply` 再 `/plugin update campus-apply@campus-apply`，然后 `/reload-plugins` 或新开会话（对 agent 说"把 campus-apply 插件更新到最新版"也行）。想自动更新，在 `/plugin` 的 Marketplaces 页对 campus-apply 开 auto-update；第三方 marketplace 默认不自动更新。用 zip 装的要重新下载解压覆盖再更新。
 
