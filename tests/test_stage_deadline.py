@@ -103,11 +103,20 @@ def test_optional_timing_has_only_safe_metrics(cdp, tmp_path):
     timing = tmp_path / 'timing.jsonl'
     result = invoke(cdp, tmp_path, CA_TIMING_FILE=str(timing))
     assert result.returncode == 0
-    data = json.loads(timing.read_text())
-    assert data['command'] == 'stage' and data['status'] == 'success'
-    assert 0 <= data['elapsed_seconds'] < 1.6
-    assert set(data) <= {'command', 'status', 'elapsed_seconds', 'locate_seconds', 'execute_seconds', 'wait_seconds'}
-    assert all(isinstance(value, (int, float)) and value >= 0 for key, value in data.items() if key.endswith('_seconds'))
+    # 两行：stage 自己的分段计时，和每条命令都记的那一行（算命令之间的空置要用它）
+    rows = [json.loads(line) for line in timing.read_text().splitlines() if line.strip()]
+    assert len(rows) == 2
+    staged = next(r for r in rows if 'status' in r)
+    assert staged['command'] == 'stage' and staged['status'] == 'success'
+    assert 0 <= staged['elapsed_seconds'] < 1.6
+    assert set(staged) <= {'command', 'status', 'elapsed_seconds', 'locate_seconds',
+                           'execute_seconds', 'wait_seconds'}
+    outer = next(r for r in rows if 'started_at' in r)
+    assert set(outer) == {'command', 'started_at', 'elapsed_seconds', 'exit_code'}
+    assert outer['command'] == 'stage' and outer['exit_code'] == 0
+    for row in rows:
+        assert all(isinstance(v, (int, float)) and v >= 0
+                   for k, v in row.items() if k.endswith('_seconds'))
 
 
 def test_one_transient_disconnect_recovers_without_reinjecting(cdp, tmp_path):

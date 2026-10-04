@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构网申表单：面板形状测试台</title>
+<!--
+  本地测试用的虚构网申页，不连任何招聘站，字段值全是编的。
+
+  apply_form.html 里只有一种面板形状——挂 body 下、紧贴输入框下方 2px、选完自动移除——
+  恰好是填写执行器唯一能处理的那一种。这一页补的是 2026-10-05 在两个真实站点上实测到的
+  另外三种形状，外加一条收面板脾气的对照。每种形状都附了当时量到的数。
+  站名不写进 fixture（结论归站点笔记），只记结构和几何；class 名用的是公开组件库的形状。
+
+  形状 A — 祖先吞并：下拉的真面板是 sd-Dropdown-dropdown-*，它的祖先 sd-Dropdown-container-*
+           也命中 lib_fill.js 的 PANEL_SEL（[class*="Dropdown"]）。容器是行内常驻的、每个下拉
+           一个，不是弹层。panels() 的"只留最外层"规则（out.some(p => p.contains(el)) 就跳过）
+           于是把真面板当成祖先的后代丢掉，_panel_for 永远配不上。实测证据：
+           {"realPanelExists":true,"realPanelVisible":true,
+            "realPanelIndexInKept":-1,"swallowedBy":{"cls":"sd-Dropdown-container-1CigZ"}}
+  形状 B — 面板盖住控件：面板不在输入框上方也不在下方，而是盖在输入框上。实测几何：
+           输入框 x=376 y=443 w=131 h=32（底边 475）／面板 x=415 y=440 w=280 h=341。
+           panels() 其实收到了这个面板（实测 keptItself:true），失败在 _panel_for 的几何配对：
+           gap = min(|440-475|, |443-781|) = 35 > 24，于是真面板被扔掉。
+  形状 C — 常驻假容器噪音：sd-Dropdown-container-* 是每个下拉的常驻行内容器，实测页面上有
+           77 个，尺寸都够大，空表时也是 77 个，和实际开没开面板完全无关。于是 open_panels
+           恒为 77，整页必报 ERR_PANELS，哪怕一个面板都没开过。A 和 C 是同一个 DOM 结构的
+           两个后果，这里做成两组，能分别测。
+  收面板脾气（待处理 124）——有效办法两站完全相反：
+           甲站"再点一次输入框" 10/10 有效、"点字段标题" 10 次全部无效；
+           乙站正好反过来，"点板块标题"有效、"再点一次输入框"无效。
+           两个控件各模拟一种脾气，面板都紧贴输入框下方 2px（配得上，考的只是收面板）。
+
+  查询参数：
+    ?shape=a|b|c|close|all   只渲染哪一组，不给就全渲染（all）
+    ?fillers=<个数>          形状 C 的常驻假容器个数，默认 77（实测值）
+
+  给测试用的接口（都是只读的，页面自己不调）：
+    window.fixtureTruth()   —— 真值，每个控件页面内部实际存着什么
+    window.fixtureAudit()   —— 行为审计：面板开着几个、假容器几个、每种收面板的办法各被试了
+                               几次（哪招有效就看哪招之后面板数归零）、提交点了没
+-->
+<style>
+body{font:16px/1.7 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px;cursor:pointer}
+.ps-field{margin:14px 0}
+.ps-field-title{display:inline-block;width:120px;vertical-align:top;color:#555;cursor:pointer}
+.ps-input{box-sizing:border-box;font:inherit;height:34px;width:260px;padding:6px 8px;
+  border:1px solid #bbb;border-radius:4px;background:#fff;cursor:pointer}
+.ps-date{width:131px;height:32px}                 /* 实测几何：输入框 w=131 h=32 */
+.ps-note{color:#888;font-size:14px;margin:4px 0 0 124px}
+.ps-actions{margin:30px 0}
+button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;background:#fff;cursor:pointer}
+
+/* 形状 A / C 的常驻行内容器：每个下拉一个，页面一加载就在，不是弹层。
+   它和真面板都命中 [class*="Dropdown"]，这正是祖先吞并的前提。 */
+.sd-Dropdown-container-1CigZ{position:relative;display:inline-block;vertical-align:top;width:260px}
+.sd-Dropdown-container-1CigZ>.ps-input{display:block;width:100%}
+/* 弹层的通用外观。位置分两种：形状 A 的插在容器里面（下面那条规则），
+   收面板脾气那两个挂 body 下，位置由脚本按输入框几何写成行内样式。 */
+.sd-Dropdown-dropdown-1CigZ,.ant-select-dropdown,.ant-calendar-picker-container{
+  box-sizing:border-box;    /* 边框算在尺寸里，量出来的 w/h 才等于实测值 */
+  position:absolute;z-index:60;background:#fff;border:1px solid #bbb;border-radius:4px;
+  box-shadow:0 4px 14px rgba(0,0,0,.12);min-width:200px;max-height:220px;overflow:auto}
+.sd-Dropdown-container-1CigZ>.sd-Dropdown-dropdown-1CigZ{left:0;top:100%;margin-top:2px}
+.ant-calendar-picker-container{width:280px;height:341px;max-height:none}  /* 实测 280×341 */
+/* 日期面板顶部的年月导航条。它正好压在输入框中心点上，所以"面板盖住控件"时落在它身上的
+   点击不会误选某一天 —— 真实的日期面板也是这个布局。 */
+.ant-calendar-header{height:40px;line-height:40px;text-align:center;border-bottom:1px solid #eee;color:#555}
+.sd-Dropdown-dropdown-1CigZ ul,.ant-select-dropdown ul,.ant-calendar-picker-container ul{
+  list-style:none;margin:0;padding:4px 0}
+.sd-Menu-content-item,.ant-select-dropdown-menu-item,.ant-calendar-date-item{padding:6px 14px;cursor:pointer}
+.sd-Menu-content-item:hover,.ant-select-dropdown-menu-item:hover,.ant-calendar-date-item:hover{background:#f0f6ff}
+</style>
+
+<h1>虚构网申表单：面板形状测试台</h1>
+<p>本地测试台，所有字段值都是编的；这里没有真实投递。站名不写在页面里，只留结构和实测几何。</p>
+
+<section class="ps-group" data-group="a">
+  <h2 class="ps-section-title">形状 A：真面板被自己的祖先吞掉</h2>
+  <!-- 真面板 sd-Dropdown-dropdown-* 插在常驻容器 sd-Dropdown-container-* 里面，absolute 定位
+       紧贴输入框下方 2px。单看位置 _panel_for 一配就中，失败完全是祖先吞并造成的：
+       panels() 先收下命中同一选择器的祖先容器，再按"只留最外层"把真面板跳过。
+       容器高度 34px，所以容器本身和输入框的 gap = 34 > 24，连它也配不上 —— 一个都挑不出来，
+       报"点了之后 N 秒内没出现面板"。 -->
+  <div class="ps-field" data-shape="a">
+    <label class="ps-field-title">意向城市</label>
+    <div class="sd-Dropdown-container-1CigZ">
+      <input class="ps-input" id="ps-a-city" data-ps-input="a-city" data-display="a-city"
+             readonly placeholder="请选择">
+    </div>
+    <p class="ps-note">面板是容器的后代；容器行内常驻，不是弹层。</p>
+  </div>
+</section>
+
+<section class="ps-group" data-group="b">
+  <h2 class="ps-section-title">形状 B：面板盖在输入框上</h2>
+  <!-- 日期面板只认 mousedown（页面脚本的 el.click() 打不开，真实鼠标事件带 mousedown 能打开），
+       挂 body 下，panels() 收得到它本身；位置按实测的相对偏移摆：
+       左边比输入框左边右 39px、上边比输入框上边高 3px，280×341，于是盖住输入框中心点。
+       _panel_for 算出的 gap = 35 > 24，把唯一的真面板扔掉。 -->
+  <div class="ps-field" data-shape="b">
+    <label class="ps-field-title">出生日期</label>
+    <input class="ps-input ps-date" id="ps-b-birth" data-ps-input="b-birth" data-display="b-birth"
+           readonly placeholder="请选择日期">
+    <p class="ps-note">面板覆盖输入框中心点，再点一次输入框会报 covered。</p>
+  </div>
+</section>
+
+<section class="ps-group" data-group="close">
+  <h2 class="ps-section-title">收面板脾气对照（点这个标题相当于"点板块标题"）</h2>
+  <!-- 待处理 124：两站的有效收法完全相反，所以写死通用顺序必然有一站全错。
+       两个控件的面板都挂 body 下、紧贴输入框下方 2px（找得到），选完都不自动收起，
+       必须靠收面板的办法；区别只在哪一招认。 -->
+  <div class="ps-field" data-shape="close-reclick">
+    <label class="ps-field-title">第一志愿</label>
+    <!-- 甲站脾气：再点一次输入框有效（10/10）；点字段标题无效（10 次全部无效） -->
+    <input class="ps-input" id="ps-close-reclick" data-ps-input="close-reclick"
+           data-display="close-reclick" readonly placeholder="请选择">
+    <p class="ps-note">只认"再点一次输入框"。</p>
+  </div>
+  <div class="ps-field" data-shape="close-section">
+    <label class="ps-field-title">意向部门</label>
+    <!-- 乙站脾气：点板块标题有效；再点一次输入框无效（面板原样开着） -->
+    <input class="ps-input" id="ps-close-section" data-ps-input="close-section"
+           data-display="close-section" readonly placeholder="请选择">
+    <p class="ps-note">只认"点板块标题"，再点输入框没反应。</p>
+  </div>
+</section>
+
+<section class="ps-group" data-group="c">
+  <h2 class="ps-section-title">形状 C：常驻假容器噪音</h2>
+  <!-- 这一组只有一个普通文本框是要填的，一个面板都不会开。下面那一堆容器是噪音：
+       每个下拉都有一个这样的行内容器，实测 77 个，尺寸都够大（都过得了 panels() 的
+       w<20||h<10 门槛），空表时也是 77 个。于是 fill 收尾时 panels().length 恒为 77，
+       整页必报 ERR_PANELS，和实际有没有开过面板无关。 -->
+  <div class="ps-field" data-shape="c-text">
+    <label class="ps-field-title">姓名</label>
+    <input type="text" class="ps-input" id="ps-c-name" data-ps-input="c-name">
+    <p class="ps-note">这个字段能填成；面板数却不是 0。</p>
+  </div>
+  <div id="ps-fillers"></div>
+</section>
+
+<div class="ps-actions"><button type="button" id="ps-submit">投递</button></div>
+
+<script>
+(() => {
+'use strict';
+const params = new URL(location.href).searchParams;
+const shape = (params.get('shape') || 'all').toLowerCase();
+const fillerCount = Math.max(0, Math.min(500, Number(params.get('fillers') || 77) | 0));
+
+// 只留选中的那一组，整组移走而不是隐藏：panels() 按 checkVisibility 判，隐藏的它看不见，
+// 但留在 DOM 里会让"假容器有几个"这类计数断言对不上。
+if (shape !== 'all')
+  document.querySelectorAll('.ps-group').forEach(g => { if (g.dataset.group !== shape) g.remove(); });
+
+// ---- 真值：页面内部真正存着的东西。测试拿它当标尺，驱动代码不许直接读它。----
+const truth = {};
+const openPanels = new Set();
+// 每种收面板的办法各被试了几次。待处理 124 要的"现场试几种办法、哪招有效就记下来"，
+// 验收点就在这里：试过哪几招一目了然，面板数在哪一招之后归零就是哪招有效。
+const closeTries = {};
+const audit = {submitClicked: 0};
+
+const bump = (key, how) => {
+  const row = closeTries[key] || (closeTries[key] = {});
+  row[how] = (row[how] || 0) + 1;
+};
+const closePanel = panel => { panel.remove(); openPanels.delete(panel); };
+const panelOf = key => [...openPanels].find(p => p.dataset.owner === key) || null;
+const items = (cls, values) =>
+  '<ul>' + values.map(v => '<li class="' + cls + '">' + v + '</li>').join('') + '</ul>';
+const choose = (input, key, panel, cls, after) => {
+  panel.querySelectorAll('.' + cls).forEach(li => li.addEventListener('click', () => {
+    truth[key] = li.textContent;
+    input.value = li.textContent;
+    if (after) after(panel);
+  }));
+};
+
+// ---- 形状 A：真面板插在常驻容器里面 ----
+const A_OPTIONS = ['北京市', '上海市', '深圳市', '成都市'];
+document.querySelectorAll('[data-shape="a"] [data-ps-input]').forEach(input => {
+  const key = input.dataset.psInput;
+  const container = input.closest('[class*="sd-Dropdown-container"]');
+  truth[key] = '';
+  input.addEventListener('click', () => {
+    const open = panelOf(key);
+    if (open) { bump(key, 'click-input-again'); closePanel(open); return; }
+    const panel = document.createElement('div');
+    panel.className = 'sd-Dropdown-dropdown-1CigZ';
+    panel.dataset.owner = key;
+    panel.innerHTML = items('sd-Menu-content-item', A_OPTIONS);
+    container.appendChild(panel);      // 关键：插在常驻容器里面，不是挂 body 下
+    openPanels.add(panel);
+    choose(input, key, panel, 'sd-Menu-content-item', closePanel);  // 选中后组件自己收面板
+  });
+});
+
+// ---- 形状 B：面板盖在输入框上 ----
+const B_DATES = ['2001-02-14', '2002-07-03', '2003-11-28'];
+document.querySelectorAll('[data-shape="b"] [data-ps-input]').forEach(input => {
+  const key = input.dataset.psInput;
+  truth[key] = '';
+  // 只听 mousedown：页面脚本的 el.click() 只派发 click，打不开；CDP 的真实鼠标事件带 mousedown。
+  input.addEventListener('mousedown', () => {
+    if (panelOf(key)) return;
+    const box = input.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.className = 'ant-calendar-picker-container';
+    panel.dataset.owner = key;
+    panel.style.left = (box.left + scrollX + 39) + 'px';   // 实测：面板左边比输入框左边右 39
+    panel.style.top = (box.top + scrollY - 3) + 'px';      // 实测：面板上边比输入框上边高 3
+    // 顶部导航条占满输入框中心点那一带，所以"盖住"时的误点落在它身上，不会选中某一天
+    panel.innerHTML = '<div class="ant-calendar-header">2002年 7月</div>'
+      + items('ant-calendar-date-item', B_DATES);
+    document.body.appendChild(panel);  // 挂 body 下，panels() 收得到它本身
+    openPanels.add(panel);
+    choose(input, key, panel, 'ant-calendar-date-item', closePanel);
+  });
+});
+
+// ---- 收面板脾气对照 ----
+const CLOSE_OPTIONS = {'close-reclick': ['AI产品岗', '产品运营岗', '商业分析岗'],
+                       'close-section': ['技术线', '商业线']};
+const CLOSE_PANEL_CLASS = {'close-reclick': 'sd-Dropdown-dropdown-1CigZ',
+                           'close-section': 'ant-select-dropdown'};
+const CLOSE_ITEM_CLASS = {'close-reclick': 'sd-Menu-content-item',
+                          'close-section': 'ant-select-dropdown-menu-item'};
+document.querySelectorAll('[data-shape^="close-"] [data-ps-input]').forEach(input => {
+  const key = input.dataset.psInput;
+  const temper = input.closest('[data-shape]').dataset.shape;
+  truth[key] = '';
+  input.addEventListener('click', () => {
+    const open = panelOf(key);
+    if (open) {
+      bump(key, 'click-input-again');
+      // 甲站脾气：再点一次输入框就收。乙站脾气：原样开着，这一招无效。
+      if (temper === 'close-reclick') closePanel(open);
+      return;
+    }
+    const box = input.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.className = CLOSE_PANEL_CLASS[temper];
+    panel.dataset.owner = key;
+    panel.style.left = (box.left + scrollX) + 'px';
+    panel.style.top = (box.bottom + scrollY + 2) + 'px';   // 紧贴输入框下方 2px，配得上
+    panel.innerHTML = items(CLOSE_ITEM_CLASS[temper], CLOSE_OPTIONS[temper]);
+    document.body.appendChild(panel);
+    openPanels.add(panel);
+    choose(input, key, panel, CLOSE_ITEM_CLASS[temper], null);  // 选完不自动收起
+  });
+});
+
+// 点字段标题：只记一笔，什么都不做。实测甲站"点字段标题"10 次全部无效，乙站同样无效——
+// 两站都不认这一招，而填写执行器把它排在第二位。标签没有 for=（连了 for= 浏览器会把点击
+// 转发回输入框，刚关的面板又开了）。
+document.querySelectorAll('.ps-field-title').forEach(label => {
+  label.addEventListener('click', () => {
+    const input = label.closest('.ps-field').querySelector('[data-ps-input]');
+    if (input) bump(input.dataset.psInput, 'click-field-label');
+  });
+});
+// 点板块标题：乙站脾气唯一认的收法。填写执行器现在没有这一招。
+document.querySelectorAll('.ps-section-title').forEach(title => {
+  title.addEventListener('click', () => {
+    title.closest('.ps-group')
+      .querySelectorAll('[data-shape="close-section"] [data-ps-input]').forEach(input => {
+        const key = input.dataset.psInput;
+        bump(key, 'click-section-title');
+        const open = panelOf(key);
+        if (open) closePanel(open);
+      });
+  });
+});
+
+// ---- 形状 C：常驻假容器噪音 ----
+const holder = document.getElementById('ps-fillers');
+if (holder) {
+  truth['c-name'] = '';
+  for (let i = 0; i < fillerCount; i++) {
+    const container = document.createElement('div');
+    container.className = 'sd-Dropdown-container-1CigZ';
+    container.dataset.shape = 'c-filler';
+    container.innerHTML = '<input class="ps-input" readonly placeholder="请选择">';
+    holder.appendChild(container);     // 只是噪音，点了不开任何面板
+  }
+}
+const nameBox = document.getElementById('ps-c-name');
+if (nameBox) nameBox.addEventListener('input', () => { truth['c-name'] = nameBox.value; });
+
+document.getElementById('ps-submit').addEventListener('click', () => { audit.submitClicked++; });
+
+// ---- 给测试用的只读接口 ----
+window.fixtureTruth = () => JSON.parse(JSON.stringify(truth));
+window.fixtureAudit = () => ({
+  shape,
+  openPanels: openPanels.size,
+  openPanelClasses: [...openPanels].map(p => p.className),
+  fakeContainers: document.querySelectorAll('[class*="sd-Dropdown-container"]').length,
+  closeTries: JSON.parse(JSON.stringify(closeTries)),
+  submitClicked: audit.submitClicked,
+});
+})();
+</script>
+</html>

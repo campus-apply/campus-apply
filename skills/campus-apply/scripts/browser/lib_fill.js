@@ -323,6 +323,35 @@
       return { error: 'no-label' };
     },
 
+    // 这个控件所在板块的标题。收面板的另一招要点它：有的组件只在"点到了板块外的静态文字"
+    // 时才收面板，点自己的标签反而又把面板打开了。两个真实站点在这件事上的结论正好相反，
+    // 所以两招都要有，哪招有效现场试。
+    //
+    // 要点板块的标题，不是字段自己的标签——字段标签的 class 常常也带 title 字样，
+    // 先命中它就等于把"点标签"那一招又试了一遍。所以先圈出本字段的范围，再往外找。
+    sectionTitle(handle) {
+      const el = get(handle);
+      if (!el) return { error: 'gone' };
+      const HEAD = 'h1,h2,h3,h4,h5,legend,[class*="title"],[class*="Title"],'
+        + '[class*="header"],[class*="Header"],[class*="block-name"]';
+      // 本字段的范围：往上走到祖先里出现第二个输入控件为止
+      let field = el;
+      for (let node = el.parentElement, d = 0;
+           node && node !== document.body && d < 5
+           && node.querySelectorAll('input:not([type=hidden]),textarea,select').length <= 1;
+           node = node.parentElement, d++) field = node;
+      for (let node = field.parentElement, d = 0; node && node !== document.body && d < 8;
+           node = node.parentElement, d++) {
+        for (const head of node.querySelectorAll(HEAD)) {
+          if (head.contains(el) || field.contains(head) || !visible(head)) continue;
+          const text = clean(head.innerText);
+          if (text && text.length < 40)
+            return { handle: register(head), text: text.slice(0, 40) };
+        }
+      }
+      return { error: 'no-title' };
+    },
+
     // 开始盯着页面的变化。点开面板之前调一次。
     watchStart() { watchStart(); return true; },
 

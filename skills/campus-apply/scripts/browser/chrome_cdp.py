@@ -722,7 +722,8 @@ def _panel_still_open(tab, handle):
 # 收面板的几招。顺序不写死：哪一招在本页奏效就记下来，后面的字段先试它。
 # 两个真实站点的结论正好相反——一个站"再点一次输入框"十次全中、"点字段标题"十次全不中，
 # 另一个站反过来。所以这是要现场试出来的，不是可以定在代码里的偏好。
-CLOSE_TRICKS = ('click-input-again', 'click-field-label', 'soft-click-label')
+CLOSE_TRICKS = ('click-input-again', 'click-field-label', 'click-section-title',
+                'soft-click-label')
 
 
 def _close_panels(tab, handle, budget, learned=None):
@@ -736,6 +737,7 @@ def _close_panels(tab, handle, budget, learned=None):
     actions = {
         'click-input-again': lambda: _real_click(tab, handle),
         'click-field-label': lambda: _click_own_label(tab, handle),
+        'click-section-title': lambda: _click_section_title(tab, handle),
         'soft-click-label': lambda: _soft_click_label(tab, handle),
     }
     order = list(CLOSE_TRICKS)
@@ -766,8 +768,17 @@ def _click_own_label(tab, handle):
 
 
 def _soft_click_label(tab, handle):
-    """最后一招：对标签派发合成点击（有的组件只在 mousedown/click 冒泡到容器时才收面板）。"""
+    """对标签派发合成点击（有的组件只在 mousedown/click 冒泡到容器时才收面板）。"""
     return _fill_call(tab, f'window.__caFill.softClick({_own_label(tab, handle)})')
+
+
+def _click_section_title(tab, handle):
+    """点这个控件所在板块的标题。有的组件只在点到板块外的静态文字时才收面板——
+    点字段自己的标签反而会把面板重新打开。两个真实站点的有效招式正好相反。"""
+    found = _fill_call(tab, f'window.__caFill.sectionTitle({handle})')
+    if not found or not found.get('handle'):
+        raise TabError('没找到所在板块的标题')
+    return _real_click(tab, found['handle'])
 
 
 def _real_click(tab, handle):
@@ -1449,13 +1460,7 @@ def cmd_stage(stage_path, libs=(), max_seconds=90):
         if tab is not None:
             tab.close()
         timing['elapsed_seconds'] = time.monotonic() - started
-        timing_path = os.environ.get('CA_TIMING_FILE', '')
-        if timing_path:
-            try:
-                with open(timing_path, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(timing, ensure_ascii=False) + '\n')
-            except OSError:
-                print('# timing 未写成', file=sys.stderr)
+        write_timing(timing)
 
 
 def cmd_read_urls(list_path, out_dir, start=1, end=999999):
@@ -1630,6 +1635,22 @@ def take_options(argv):
     return rest
 
 
+def write_timing(record):
+    """往 CA_TIMING_FILE 追一行 JSONL。只写命令、状态、秒数和墙钟时间，不写字段值或凭证。
+
+    带墙钟时间戳是为了能算出命令**之间**的空当：浏览器加载好了、命令却还没发出来的那段，
+    在实测里比命令本身长得多，而只记每条命令跑了多久是看不见它的。
+    """
+    path = os.environ.get('CA_TIMING_FILE', '')
+    if not path:
+        return
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    except OSError:
+        print('# timing 未写成', file=sys.stderr)
+
+
 def main(argv):
     if any(a in ('-h', '--help') for a in argv):
         print(__doc__)
@@ -1721,4 +1742,16 @@ if __name__ == '__main__':
         sys.stdout.reconfigure(encoding='utf-8')
     except AttributeError:
         pass
-    sys.exit(main(sys.argv[1:]))
+    # 每条命令都记一行：什么时候开始、跑了多久、退出码多少。算"浏览器空置"要靠相邻两行的
+    # 墙钟时间戳相减——上一条命令结束到下一条命令开始的那段，页面就在那里干等着。
+    _started_wall, _started = time.time(), time.monotonic()
+    _code = 1
+    try:
+        _code = main(sys.argv[1:])
+        sys.exit(_code)
+    finally:
+        if os.environ.get('CA_TIMING_FILE'):
+            write_timing(dict(command=(sys.argv[1:] or ['?'])[0],
+                              started_at=round(_started_wall, 3),
+                              elapsed_seconds=round(time.monotonic() - _started, 3),
+                              exit_code=_code))
