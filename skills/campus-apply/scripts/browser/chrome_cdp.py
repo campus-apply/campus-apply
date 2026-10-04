@@ -14,7 +14,7 @@
         元素会先滚到视口中间再按中心点点击；输出 clicked <标签> <x>,<y>；找不到输出 NO_ELEMENT。
   chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
-        出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令每 2 秒轮询日志到 DONE / ERR / 超时（默认 90 秒）。
+        出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令复用连接轮询日志到 DONE / ERR / 超时（默认总预算 90 秒）；失败退出非零。
   chrome_cdp.py --mark <运行ID> read-urls <列表文件> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N] [--stop-file 文件]
         列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 --pace 秒（默认 1-2；公开页建议 0.3-0.6，登录后的页面 0.8-1.5），
         用 read_page.js 读正文存 <输出目录>/<id>.json；每 --guard-every（默认 5）个跑一次 guard.js，遇验证码/跳登录打印 STOP 并停。
@@ -36,12 +36,14 @@
 选项可以放在子命令前后任意位置：--mark、--match、--port（调试端口，默认 9222）、--pace、--guard-every、--stop-file、--wait。
 同义的环境变量：TAB_MARK、TAB_MATCH、CA_CDP_PORT、PACE_MIN / PACE_MAX、GUARD_EVERY、STOP_FILE、SNIFF_WAIT；命令行选项优先。
 其他环境变量：CA_CDP_TIMEOUT 单个标签页应答超时秒数（默认 10）；CA_BROWSER 浏览器可执行文件路径（不设则按平台找 Chrome / Edge）；
-  CA_CHROME_PROFILE 专用配置目录（默认 ~/campus-apply-chrome）。
+  CA_CHROME_PROFILE 专用配置目录（默认 ~/campus-apply-chrome）；CA_TIMING_FILE 可选 JSONL 计时输出文件，只有命令/状态/秒数。
 启动后第一次要在这个专用配置里重新登录招聘站；新版 Chrome 不允许在默认配置目录上开远程调试。
 输出约定：找不到调试浏览器 ERR_NO_CDP（退出码 2）；没找到标签页 NO_MATCHING_TAB（1）；JS 抛异常 ERR_JS: …（1）。
 返回值是字符串就原样打印，其他类型打成 JSON。
 """
-import base64, json, os, platform, random, re, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
+import base64, io, json, math, os, platform, random, re, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
+
+from http.client import HTTPConnection, HTTPResponse
 
 PORT = int(os.environ.get('CA_CDP_PORT', '9222'))
 HOST = '127.0.0.1'
@@ -55,34 +57,56 @@ class TabError(Exception):
     """标签页连不上、不应答或协议层出错。"""
 
 
+class StageDeadline(TabError):
+    """一次 stage 的总时间预算已用完。"""
+
+
+def remaining_timeout(deadline, limit=TIMEOUT):
+    if deadline is None:
+        return limit
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise StageDeadline('stage deadline exceeded')
+    return min(limit, remaining)
+
+
 class Tab:
     """一个页面目标的 DevTools 连接：标准库实现的最小 WebSocket 客户端，只发文本帧。"""
 
-    def __init__(self, target):
+    def __init__(self, target, deadline=None):
+        self.deadline = deadline
         self.target = target
         self._id = 0
         ws = target['webSocketDebuggerUrl']
         path = '/' + ws.split('/', 3)[3]
-        self.sock = socket.create_connection((HOST, PORT), timeout=TIMEOUT)
-        key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall((f'GET {path} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
-                           f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
-        head = b''
-        while b'\r\n\r\n' not in head:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise TabError('握手时连接被关闭')
-            head += chunk
-        if not head.startswith(b'HTTP/1.1 101'):
-            raise TabError('握手失败: ' + head.split(b'\r\n', 1)[0].decode(errors='replace'))
-        self._buf = head.split(b'\r\n\r\n', 1)[1]
+        self.sock = socket.create_connection((HOST, PORT), timeout=remaining_timeout(deadline))
+        try:
+            key = base64.b64encode(os.urandom(16)).decode()
+            self.sock.sendall((f'GET {path} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                               f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
+            head = b''
+            while b'\r\n\r\n' not in head:
+                self.sock.settimeout(remaining_timeout(self.deadline))
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise TabError('握手时连接被关闭')
+                head += chunk
+            if not head.startswith(b'HTTP/1.1 101'):
+                raise TabError('握手失败: ' + head.split(b'\r\n', 1)[0].decode(errors='replace'))
+            self._buf = head.split(b'\r\n\r\n', 1)[1]
+        except (OSError, TabError):
+            self.sock.close()
+            raise
 
     def close(self):
         try:
-            self._send(b'', op=8)
-            self.sock.close()
-        except OSError:
+            if self.deadline is None or time.monotonic() < self.deadline:
+                self.sock.settimeout(remaining_timeout(self.deadline))
+                self._send(b'', op=8)
+        except (OSError, StageDeadline):
             pass
+        finally:
+            self.sock.close()
 
     def _send(self, data, op=1):
         mask = os.urandom(4)
@@ -98,6 +122,7 @@ class Tab:
 
     def _read(self, n):
         while len(self._buf) < n:
+            self.sock.settimeout(remaining_timeout(self.deadline))
             chunk = self.sock.recv(max(4096, n - len(self._buf)))
             if not chunk:
                 raise TabError('连接被关闭')
@@ -132,9 +157,11 @@ class Tab:
                 return b''.join(parts).decode('utf-8')
 
     def call(self, method, **params):
+        self.sock.settimeout(remaining_timeout(self.deadline))
         self._id += 1
         self._send(json.dumps({'id': self._id, 'method': method, 'params': params}).encode('utf-8'))
         while True:
+            remaining_timeout(self.deadline)
             try:
                 msg = json.loads(self._recv_message())
             except socket.timeout:
@@ -155,16 +182,78 @@ class Tab:
         return r.get('result', {}).get('value'), None
 
 
-def http(path, method='GET'):
-    req = urllib.request.Request(f'http://{HOST}:{PORT}{path}', method=method)
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return json.loads(r.read().decode('utf-8'))
+class _DeadlineReader(io.RawIOBase):
+    """每次实际 socket 读取前收紧预算，包含 HTTP 状态行和 headers。"""
+
+    def __init__(self, raw, sock, deadline):
+        self.raw, self.sock, self.deadline = raw, sock, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        self.sock.settimeout(remaining_timeout(self.deadline, 5))
+        return self.raw.readinto(buffer)
+
+    def close(self):
+        try:
+            self.raw.close()
+        finally:
+            super().close()
 
 
-def page_targets():
+class _DeadlineSocket:
+    """只供 HTTPResponse 建立文件流；不替换系统 socket 或全局 opener。"""
+
+    def __init__(self, sock, deadline):
+        self.sock, self.deadline = sock, deadline
+
+    def makefile(self, mode):
+        raw = self.sock.makefile(mode, buffering=0)
+        return io.BufferedReader(_DeadlineReader(raw, self.sock, self.deadline))
+
+
+def http(path, method='GET', deadline=None):
+    url = f'http://{HOST}:{PORT}{path}'
+    if deadline is None:
+        req = urllib.request.Request(url, method=method)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode('utf-8'))
+    # urlopen 的 timeout 是空闲超时；持续分片会延长 header/body 的实际总时间。
+    # 仅有 deadline 的本地 CDP 请求走逐次读取预算，普通命令保持旧路径。
+    connection = HTTPConnection(HOST, PORT, timeout=remaining_timeout(deadline, 5))
+    connection.response_class = lambda sock, **kw: HTTPResponse(_DeadlineSocket(sock, deadline), **kw)
+    response = None
+    try:
+        connection.connect()
+        connection.sock.settimeout(remaining_timeout(deadline, 5))
+        connection.request(method, path)
+        remaining_timeout(deadline)
+        response = connection.getresponse()
+        remaining_timeout(deadline)
+        if not 200 <= response.status < 300:
+            raise urllib.error.HTTPError(url, response.status, response.reason, response.headers, None)
+        chunks = []
+        while True:
+            remaining_timeout(deadline)
+            chunk = response.read1(65536)
+            remaining_timeout(deadline)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        value = json.loads(b''.join(chunks).decode('utf-8'))
+        remaining_timeout(deadline)
+        return value
+    finally:
+        if response is not None:
+            response.close()
+        connection.close()
+
+
+def page_targets(deadline=None):
     """/json/list 里 type 为 page 的目标，保持 Chrome 给的顺序。连不上时返回 None。"""
     try:
-        targets = http('/json/list')
+        targets = http('/json/list', deadline=deadline)
     except (urllib.error.URLError, OSError, ValueError):
         return None
     return [t for t in targets if t.get('type') == 'page']
@@ -200,38 +289,43 @@ def cmd_list(kw=''):
     return 0
 
 
-def connect(target):
+def connect(target, deadline=None):
     try:
-        return Tab(target)
+        return Tab(target, deadline=deadline)
+    except StageDeadline:
+        raise
     except (OSError, TabError):
         return None
 
 
-def find_tab(mark, match):
+def find_tab(mark, match, deadline=None):
     """按认领标记（探测 sessionStorage）或 URL 子串找标签页；返回已连接的 Tab 或 None。不应答的标签页跳过。"""
-    tabs = page_targets()
+    tabs = page_targets(deadline=deadline)
     if tabs is None:
         return 'ERR_NO_CDP'
     for t in tabs:
+        remaining_timeout(deadline)
         if match and not mark:
             if match in t.get('url', ''):
-                tab = connect(t)
+                tab = connect(t, deadline=deadline)
                 if tab:
                     return tab
             continue
         if not t.get('url', '').startswith('http'):
             continue
-        tab = connect(t)
+        tab = connect(t, deadline=deadline)
         if not tab:
             continue
         try:
             v, _ = tab.evaluate(PROBE_JS)
         except TabError:
             tab.close()
+            remaining_timeout(deadline)
             continue
         if v == mark:
             return tab
         tab.close()
+    remaining_timeout(deadline)
     return None
 
 
@@ -574,34 +668,165 @@ def cmd_exec(js_path):
 
 
 def cmd_stage(stage_path, libs=(), max_seconds=90):
-    if not os.path.isfile(stage_path):
-        print(f'ERR_NO_FILE {stage_path}')
-        return 2
-    run_id = str(int(time.time() * 1000))[-7:]
-    parts = [f"window.__caRun='{run_id}'; window.__calog='';"]
-    for lib in list(libs) + [stage_path]:
-        with open(lib, encoding='utf-8') as f:
-            parts.append(f.read())
-        parts.append(';')  # 库文件末尾不一定有分号，没有的话下一段 (async…) 会被当成函数调用
-    code, out = run_js('\n'.join(parts), await_promise=False)  # stage 是 async 函数，只等注入，不等它跑完
-    if code:
+    """旧 stage 表达式和文本日志保持可用；驱动按运行 ID、终态及实际时间判断。"""
+    started = time.monotonic()
+    timing = {'command': 'stage', 'status': 'error', 'locate_seconds': 0.0,
+              'execute_seconds': 0.0, 'wait_seconds': 0.0}
+    tab, out = None, ''
+    phase = None
+    phase_started = started
+
+    def finish_phase():
+        nonlocal phase, phase_started
+        if phase:
+            timing[phase + '_seconds'] += time.monotonic() - phase_started
+        phase = None
+
+    def begin_phase(name):
+        nonlocal phase, phase_started
+        finish_phase()
+        phase, phase_started = name, time.monotonic()
+
+    def timeout_result():
+        timing['status'] = 'timeout'
         print(out)
-        return code
-    read = f"(window.__caRun==='{run_id}' ? (window.__calog||'') : 'STALE:'+(window.__calog||''))"
-    waited, out = 0, ''
-    while waited < max_seconds:
-        time.sleep(2)
-        waited += 2
-        code, out = run_js(read)
-        out = out or ''
-        if code:
-            continue  # 页面导航中探测不到标记之类的暂时失败，继续等到超时
-        if 'DONE' in out or out.startswith('ERR') or 'ERR ' in out:
-            break
-    print(out)
-    if waited >= max_seconds:
-        print(f'(timeout {max_seconds}s, last log above)')
-    return 0
+        print(f'(timeout {max_seconds:g}s, last log above)')
+        return 1
+
+    try:
+        try:
+            max_seconds = float(max_seconds)
+        except (ValueError, TypeError):
+            max_seconds = 0
+        if not math.isfinite(max_seconds) or max_seconds <= 0:
+            timing['status'] = 'usage_error'
+            print('ERR_USAGE stage: --max 必须是有限正数秒')
+            return 2
+        deadline = started + max_seconds
+        sources = []
+        for path in list(libs) + [stage_path]:
+            if not os.path.isfile(path):
+                print(f'ERR_NO_FILE {path}')
+                return 2
+            with open(path, encoding='utf-8') as f:
+                sources.append(f.read())
+        mark, match = os.environ.get('TAB_MARK', ''), os.environ.get('TAB_MATCH', '')
+        if not (mark or match):
+            print('ERR_NEED_TAB_MARK_OR_TAB_MATCH')
+            return 2
+        begin_phase('locate')
+        found = find_tab(mark, match, deadline=deadline)
+        tab = None if found == 'ERR_NO_CDP' else found
+        remaining_timeout(deadline)
+        if found == 'ERR_NO_CDP':
+            tab = None
+            print(NO_CDP.format(port=PORT))
+            return 2
+        if tab is None:
+            print('NO_MATCHING_TAB')
+            return 1
+        run_id = os.urandom(12).hex()
+        # 捕获本次表达式的同步/Promise 异常；不监听页面其他未处理异常。
+        libraries = '\n;\n'.join(sources[:-1]) + '\n;'
+        stage = sources[-1].rstrip().rstrip(';')
+        prefix = f"(async function(){{window.__caRun='{run_id}'; window.__calog='';try{{\n{libraries}\n"
+        suffix = ("\n}catch(error){"
+                  f"if(window.__caRun==='{run_id}') window.__calog = (window.__calog||'') + "
+                  "'\\nERR ' + String(error && error.stack || error);}})()")
+        injection = prefix + f"await (\n{stage}\n);" + suffix
+        begin_phase('execute')
+        tab.call('Runtime.enable')
+        remaining_timeout(deadline)
+        compiled = tab.call('Runtime.compileScript', expression=injection,
+                            sourceURL='', persistScript=False)
+        remaining_timeout(deadline)
+        if 'exceptionDetails' in compiled:
+            # compileScript 只解析、不执行，故可安全改用旧多语句主体编译。
+            # 不用 eval/new Function，也不监听全页面异常。未返回的子 Promise
+            # 仍沿用旧 stage 的显式 ERR 日志协议；同步主体异常由 suffix 捕获。
+            injection = prefix + sources[-1] + suffix
+            compiled = tab.call('Runtime.compileScript', expression=injection,
+                                sourceURL='', persistScript=False)
+            remaining_timeout(deadline)
+            if 'exceptionDetails' in compiled:
+                details = compiled['exceptionDetails']
+                err = details.get('exception', {}).get('description') or details.get('text') or 'JS 语法错误'
+                print(f'ERR_JS: {err}')
+                return 1
+        _, err = tab.evaluate(injection, await_promise=False)
+        remaining_timeout(deadline)
+        if err:
+            print(f'ERR_JS: {err}')
+            return 1
+        read = (f"/* __caStageSnapshot */ (window.__caRun==='{run_id}' ? "
+                "{run_id:window.__caRun,log:window.__calog||''} : "
+                "{run_id:window.__caRun||'',log:window.__calog||''})")
+        reconnects = 0
+        target = tab.target
+        begin_phase('wait')
+        while True:
+            remaining_timeout(deadline)
+            try:
+                if tab is None:
+                    tab = connect(target, deadline=deadline)
+                    if tab is None:
+                        raise TabError('连接恢复失败')
+                snapshot, err = tab.evaluate(read)
+                remaining_timeout(deadline)
+            except StageDeadline:
+                raise
+            except (TabError, OSError):
+                remaining_timeout(deadline)
+                if tab:
+                    tab.close()
+                    tab = None
+                reconnects += 1
+                if reconnects > 2:
+                    print(out)
+                    print('ERR_CDP: stage 连接恢复失败')
+                    return 1
+                time.sleep(min(.2, remaining_timeout(deadline)))
+                continue
+            if err:
+                print(f'ERR_JS: {err}')
+                return 1
+            if not isinstance(snapshot, dict):
+                print('ERR_STAGE_STATE: 日志快照格式无效')
+                return 1
+            out = str(snapshot.get('log', ''))
+            if snapshot.get('run_id') != run_id:
+                timing['status'] = 'stale'
+                print('STALE:' + out)
+                print('ERR_STAGE_STALE: 本次运行已被替换或页面已重载')
+                return 1
+            lines = [line.strip() for line in out.splitlines()]
+            if any(re.match(r'^ERR(?:[ _:]|$)', line) for line in lines):
+                print(out)
+                return 1
+            if any(re.match(r'^DONE(?:\s|$)', line) for line in lines):
+                timing['status'] = 'success'
+                print(out)
+                return 0
+            time.sleep(min(.2, remaining_timeout(deadline)))
+    except StageDeadline:
+        return timeout_result()
+    except (TabError, OSError) as error:
+        if 'deadline' in locals() and time.monotonic() >= deadline:
+            return timeout_result()
+        print(f'ERR_CDP: {error}')
+        return 1
+    finally:
+        finish_phase()
+        if tab is not None:
+            tab.close()
+        timing['elapsed_seconds'] = time.monotonic() - started
+        timing_path = os.environ.get('CA_TIMING_FILE', '')
+        if timing_path:
+            try:
+                with open(timing_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(timing, ensure_ascii=False) + '\n')
+            except OSError:
+                print('# timing 未写成', file=sys.stderr)
 
 
 def cmd_read_urls(list_path, out_dir, start=1, end=999999):
@@ -810,7 +1035,10 @@ def main(argv):
                     libs.append(args[i]); i += 1
                 continue
             if args[i] == '--max':
-                max_s = int(args[i + 1]); i += 2
+                if i + 1 >= len(args):
+                    print('ERR_USAGE stage: --max 缺少秒数')
+                    return 2
+                max_s = args[i + 1]; i += 2
                 continue
             rest.append(args[i]); i += 1
         if len(rest) == 1:

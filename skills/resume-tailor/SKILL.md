@@ -10,8 +10,10 @@ description: "对照一份 JD 产出针对该岗位的简历定稿文字、一�
 - 有一份 JD：在 `applications/<公司>-<岗位>/jd.md`（job-screen 建的），或用户现给的文本/链接（先存成 jd.md）。
 - 没有 JD 也能走"通用版"：用户要先填某个站点的在线简历 / 候选人档案页，或想要一份不针对岗位的底稿。通用版跳过第 2、3 步，第 4 步以 `campus-apply.json` 里偏好的岗位类型定主线、所有经历按事实库全量写，产物放 `applications/_工作区/resume.md`；站点有自述类字段时第 8 步照走，写一版按偏好岗位类型的通用自述放 `form.md`，标明"通用版，投具体岗位时重写"。先告诉用户这是通用版、和针对岗位的版本有什么区别。
 
+清单、待决和关联记录更新及交接按 `../campus-apply/references/workflow-state.md`。
+
 ## 步骤
-1. 读：`jd.md`、`campus-apply.json` 里列的全部事实库、`rules.json`、`references/style-rules.md`；如果 `applications/` 里有以前的投递，读最近一份 `resume.md` 作为起点。
+1. 读：`jd.md`、`campus-apply.json` 里列的全部事实库、`rules.json`、`references/style-rules.md`；如果 `applications/` 里有以前的投递，读最近一份 `resume.md` 作为起点；先复用已确认且有来源的事实，缺项才查原件，来源冲突先列差异待用户定，不自行覆盖。旧申请的措辞仍需核对本次字段范围。
 2. 出"素材对照方案"给用户看，等确认后再写：一张表（JD 要求 → 对应经历 → 证据在事实库哪条）、主案例选谁、板块顺序、删掉哪些经历、哪些 JD 要求事实库覆盖不了。
 3. 只问这份 JD 新引出的口径问题（`../resume-facts/references/interview.md` 的"单次投递题库"），一轮最多 5 题，一次问完；答案写回事实库（【用户口述 日期】）或 `jd.md` 末尾"本次口径"。
 4. 写 `resume.md`（格式见 `templates/resume.template.md`），遵守 `style-rules.md`；一页篇幅的经验值是要点总数 14–18 条、每条 60–110 字。

@@ -8,7 +8,7 @@
   岗位筛选_*.md/.json、改动清单_*.md；工作目录根的 *_岗位筛选_*.xlsx；site-notes/*.md。
 不收什么：事实库、campus-apply.json、rules.json、resume.md、form.md、简历 docx/pdf、screens/、stages/、jobs/ 和其他一切。
 打码（.md / .json / .txt）：11 位手机号、邮箱、18 位证件号、"出生"附近的日期、姓名、用户主目录路径。
-最后生成 反馈摘要.md 骨架（环境和依赖检查由本脚本填，其余留给 agent 补），打印文件清单，提醒用户自己翻一遍再发。
+最后生成有来源的 反馈摘要.md（清单和包内错误自动汇总，缺会话信息明确未记录），打印文件清单，提醒用户自己翻一遍再发。
 只在用户明确要反馈包时运行。"""
 import argparse, datetime, glob, json, os, platform, re, shutil, sys
 
@@ -79,11 +79,22 @@ def environment():
         lines.append(f'- 浏览器：{find_browser() or "未找到"}')
     except Exception:
         pass
+    version_file = os.path.join(HERE, '..', 'VERSION')
+    try:
+        with open(version_file, encoding='utf-8') as f:
+            version = f.read().strip()
+        if version:
+            lines.append(f'- 当前打包工具 campus-apply 版本：{version}（来源：本skill的VERSION）')
+            return '\n'.join(lines)
+    except OSError:
+        pass
     plugin = os.path.normpath(os.path.join(HERE, '..', '..', '..', '.claude-plugin', 'plugin.json'))
     try:
-        lines.append(f"- campus-apply 版本：{json.load(open(plugin, encoding='utf-8')).get('version', '?')}")
+        with open(plugin, encoding='utf-8') as f:
+            version = json.load(f).get('version', '?')
+        lines.append(f'- 当前打包工具 campus-apply 版本：{version}（来源：仓库plugin.json）')
     except (OSError, ValueError):
-        lines.append('- campus-apply 版本：未知（请填 claude plugin details 或 SKILL 目录位置）')
+        lines.append('- 当前打包工具 campus-apply 版本：未知（VERSION和仓库清单不可读取）')
     return '\n'.join(lines)
 
 
@@ -95,12 +106,38 @@ def doctor_output():
         return f'（doctor 未能运行：{e}）'
 
 
-def summary(files):
+def bundle_evidence(files, bundle_dir):
+    """只汇总已打码副本的明确行，不把文件存在或未勾推断为完成/失败。"""
+    steps, unchecked, errors = [], [], []
+    for rel in files:
+        if os.path.splitext(rel)[1] not in TEXT_EXT:
+            continue
+        with open(os.path.join(bundle_dir, rel), encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        if '执行清单' in os.path.basename(rel):
+            done = sum(bool(re.match(r'^\s*[-*+]\s+\[[xX]\]', line)) for line in lines)
+            todo = [(n, line) for n, line in enumerate(lines, 1)
+                    if re.match(r'^\s*[-*+]\s+\[ \]', line)]
+            steps.append(f'- {rel}：已勾{done}项、未勾{len(todo)}项（来源：该清单；完成状态需结合最新日志）')
+            unchecked.extend(f'- {rel}:{n} — {line.strip()}' for n, line in todo)
+        if os.path.basename(rel) in {'log.txt', 'fill-log.md', 'fill-report.md'}:
+            for n, line in enumerate(lines, 1):
+                if re.search(r'\bERR(?:_[A-Z][A-Z0-9_]*|[ :])', line):
+                    errors.append(f'- {rel}:{n} — {line.strip()}')
+    return steps, unchecked, errors
+
+
+def summary(files, bundle_dir):
+    steps, unchecked, errors = bundle_evidence(files, bundle_dir)
+    step_text = '\n'.join(steps) or '未记录执行清单，无法从本包确认各阶段完成情况。'
+    unchecked_text = '\n'.join(unchecked) or '所收清单未检出未勾行；没有清单或实际完成情况仍需结合原记录核对。'
+    error_text = '\n'.join(errors) or '所收日志未检出明确ERR标记；没有完整工具轨迹，无法确认是否发生其他错误。'
     return f'''# campus-apply 反馈摘要（{datetime.date.today()}）
 
 ## 环境
 {environment()}
-- 用的 agent 工具及版本：（agent 补）
+- 历史执行实际载入的skill版本：未知（当前打包工具版本不能证明历史每次会话的版本）
+- 历史harness、agent及模型版本：未记录（本脚本未读取聊天或全局配置，不能从现有材料确认）
 
 ## doctor
 ```
@@ -108,19 +145,23 @@ def summary(files):
 ```
 
 ## 走到了哪一步
-（agent 补：resume-facts / job-screen / resume-tailor / apply-fill 各做没做、做到哪）
+{step_text}
 
 ## 未勾选的步骤
-（agent 补：每份执行清单里未勾选的行）
+{unchecked_text}
 
 ## 停下来问了什么
-（agent 补：一共停了几次，每次在哪一步、问什么、用户怎么答）
+未记录完整会话，无法确认停顿次数及每次问答。包内待你决定文件和填写日志可作为已记录事项的来源，不能据文件条数推算会话次数。
 
 ## 报错原文
-（agent 补：本次会话所有报错逐条原样贴）
+以下为包内日志含ERR标记的原文位置；可能含历史记录或说明，需结合上下文核对。
+{error_text}
 
 ## 不顺的地方
-（agent 补：绕弯、不确定是否按 skill 做的地方，如实写）
+未记录完整会话及逐次计时，无法自动判断绕路、返工或规则跳步；仅能根据上述清单、日志和用户另行补充核查。
+
+## 资料完整性
+本摘要已汇总包内可识别证据；会话、实际载入版本、harness与模型、停顿及工具计时仍未确认。用户补充时注明来源，不覆盖原始记录。包只包含允许收集的工作记录，没有自动发送。
 
 ## 本包文件
 {chr(10).join('- ' + f for f in files)}
@@ -134,6 +175,9 @@ def main(argv=None):
         print(__doc__); return 2
     a = ap.parse_args(argv)
     ws = os.path.abspath(a.workspace)
+    if not os.path.isdir(ws):
+        print('ERR_WORKSPACE: 工作目录不存在或不是目录', file=sys.stderr)
+        return 2
     out = a.out or os.path.join(os.path.expanduser('~'), 'Desktop', f'campus-apply-反馈_{datetime.date.today()}')
     name = a.name or profile_name(ws)
     files, masked = [], 0
@@ -148,7 +192,8 @@ def main(argv=None):
         else:
             shutil.copy2(src, dst)
         files.append(rel)
-    text, n = mask_text(summary(files), name); masked += n
+    os.makedirs(out, exist_ok=True)
+    text, n = mask_text(summary(files, out), name); masked += n
     with open(os.path.join(out, '反馈摘要.md'), 'w', encoding='utf-8') as f:
         f.write(text)
     files.append('反馈摘要.md')

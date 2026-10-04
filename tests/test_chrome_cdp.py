@@ -169,7 +169,7 @@ def test_stage_injects_libs_then_stage_and_polls_log_until_done(cdp, tmp_path):
             return None
         if seen.get('run') and f"window.__caRun==='{seen['run']}'" in expr:
             seen['polls'] = seen.get('polls', 0) + 1
-            return 'step1\nDONE' if seen['polls'] >= 2 else 'step1'
+            return {'run_id': seen['run'], 'log': 'step1\nDONE' if seen['polls'] >= 2 else 'step1'}
         return NotImplemented
     t.responder = responder
     lib = _js(tmp_path, 'const LIB_ONE = 1', 'lib.js')            # 故意不带分号
@@ -178,13 +178,18 @@ def test_stage_injects_libs_then_stage_and_polls_log_until_done(cdp, tmp_path):
     assert r.returncode == 0, r.stderr
     assert r.stdout.rstrip('\n').endswith('step1\nDONE')
     body = seen['script']
-    assert body.index("window.__calog=''") < body.index('LIB_ONE') < body.index('(async')
+    assert body.index("window.__calog=''") < body.index('LIB_ONE') < body.index('(async ()')
     assert 'const LIB_ONE = 1\n;' in body or 'const LIB_ONE = 1;' in body
 
 
 def test_stage_reports_timeout_with_last_log(cdp, tmp_path):
     t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
-    t.responder = lambda expr: 'still running' if 'window.__caRun===' in expr else None
+    def respond(expr):
+        if "window.__caRun='" in expr:
+            t.stage_run = expr.split("window.__caRun='", 1)[1].split("'", 1)[0]
+            return None
+        return {'run_id': t.stage_run, 'log': 'still running'}
+    t.responder = respond
     stage = _js(tmp_path, "(async () => {})()", 'stage.js')
     r = run(cdp.port, 'stage', stage, '--max', '2', env={'TAB_MARK': 'run1'})
     assert 'still running' in r.stdout and 'timeout 2s' in r.stdout
@@ -289,17 +294,16 @@ def test_click_waits_until_the_element_stops_moving(cdp):
     assert all(m['y'] == 300 for m in t.mouse)
 
 
-def test_stage_keeps_polling_while_tab_is_temporarily_unreachable(cdp, tmp_path):
-    import threading
+def test_stage_keeps_same_target_while_claim_marker_is_temporarily_unavailable(cdp, tmp_path):
     t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'
 
     def responder(expr):
         if "window.__caRun='" in expr:
-            t.mark = None                                   # 注入后页面“导航中”，探测不到标记
-            threading.Timer(3, lambda: setattr(t, 'mark', 'run1')).start()
+            t.mark = None  # 本次连接仍可用，不需重复探测标记
+            t.stage_run = expr.split("window.__caRun='", 1)[1].split("'", 1)[0]
             return None
         if 'window.__caRun===' in expr:
-            return 'DONE'
+            return {'run_id': t.stage_run, 'log': 'DONE'}
         return NotImplemented
     t.responder = responder
     stage = _js(tmp_path, "(async () => {})()", 'stage.js')
@@ -389,7 +393,12 @@ def test_click_accepts_coordinates_and_js_expression(cdp):
 def test_stage_injection_does_not_wait_for_the_async_script_to_finish(cdp, tmp_path):
     """stage 脚本是 (async () => {...})()，注入只等注入本身，不等它跑完；否则长脚本必超时。"""
     t = cdp.add('bbb222', 'b', 'https://x/'); t.mark = 'run1'; t.slow_promise = True
-    t.responder = lambda expr: 'DONE' if 'window.__caRun===' in expr else None
+    def respond(expr):
+        if "window.__caRun='" in expr:
+            t.stage_run = expr.split("window.__caRun='", 1)[1].split("'", 1)[0]
+            return None
+        return {'run_id': t.stage_run, 'log': 'DONE'}
+    t.responder = respond
     stage = _js(tmp_path, "(async () => { await new Promise(r => setTimeout(r, 60000)); })()", 'stage.js')
     r = run(cdp.port, '--mark', 'run1', 'stage', stage, '--max', '10', env={'CA_CDP_TIMEOUT': '1'})
     assert 'ERR_CDP' not in r.stdout and r.stdout.rstrip('\n') == 'DONE', r.stdout

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构表单：保存回读测试</title>
+<style>body{font:16px sans-serif;max-width:850px;margin:30px auto}section{border:1px solid #aaa;padding:18px;margin-bottom:18px}label{display:block;margin:10px}input,textarea,select{margin-left:12px}textarea{width:450px;height:60px}pre{white-space:pre-wrap}</style>
+<h1>虚构表单：实习经历</h1><p>只用于本地自动化测试；所有数据虚构。</p>
+<main id="rows"></main><button id="save">保存模拟草稿</button><p id="notice"></p>
+<script>
+const fields=['company','position','city','start','end','description'];
+const titles={company:'单位名称',position:'职位',city:'城市',start:'开始日期',end:'结束日期',description:'工作描述'};
+const draftKey='fixture-draft-'+(new URL(location.href).searchParams.get('run')||'manual');
+window.formModel=[];
+function values(){return [...document.querySelectorAll('section')].map(s=>Object.fromEntries(fields.map(k=>[k,s.querySelector('[data-field="'+k+'"]').value])))}
+function renderMirror(i){document.getElementById('mirror-'+i).textContent=JSON.stringify(window.formModel[i])}
+const saved=JSON.parse(localStorage.getItem(draftKey)||'[]');
+for(let i=0;i<2;i++){
+ const s=document.createElement('section');s.dataset.row=i;s.innerHTML='<h2>经历'+(i+1)+'</h2>';
+ window.formModel[i]=Object.fromEntries(fields.map(k=>[k,saved[i]?.[k]||'']));
+ for(const k of fields){
+  const label=document.createElement('label');label.textContent=titles[k];
+  const el=document.createElement(k==='description'?'textarea':k==='city'?'select':'input');el.id=k+'-'+i;el.dataset.field=k;
+  if(k==='city')el.innerHTML='<option value="">请选择</option><option>北京</option><option>上海</option>';
+  label.htmlFor=el.id;el.value=window.formModel[i][k];label.appendChild(el);s.appendChild(label);
+  const sync=()=>{window.formModel[i][k]=el.value;renderMirror(i)};el.addEventListener('input',sync);el.addEventListener('change',sync);el.addEventListener('blur',sync);
+ }
+ const pre=document.createElement('pre');pre.id='mirror-'+i;s.appendChild(pre);document.getElementById('rows').appendChild(s);renderMirror(i);
+}
+document.getElementById('save').onclick=()=>{localStorage.setItem(draftKey,JSON.stringify(window.formModel));document.getElementById('notice').textContent='模拟草稿已保存'};
+window.fixtureSnapshot=()=>({dom:values(),model:JSON.parse(JSON.stringify(window.formModel)),display:[0,1].map(i=>JSON.parse(document.getElementById('mirror-'+i).textContent)),saved:JSON.parse(localStorage.getItem(draftKey)||'[]')});
+</script></html>

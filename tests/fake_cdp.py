@@ -19,8 +19,12 @@ class FakeTab:
         self.id, self.title, self.url, self.type = tid, title, url, ttype
         self.mark = None
         self.answers = {}      # 表达式 → 返回值（Python 值）
+        self.runtime_enabled = False
+        self.compiled = []
+        self.compile_responder = None  # 可选的只解析回调，返回异常说明或 None
         self.responder = None  # 可选：函数(表达式) → 返回值；返回 NotImplemented 表示不处理
         self.evaluated = []    # 收到过的表达式，供断言
+        self.connections = 0
         self.front = 0
         self.mouse = []        # 收到的 Input.dispatchMouseEvent 参数
         self.inserted = []     # 收到的 Input.insertText 文本
@@ -89,6 +93,8 @@ class FakeCDP:
             def _ws(self):
                 tid = self.path.rsplit('/', 1)[1]
                 tab = next((t for t in cdp.tabs if t.id == tid), None)
+                if tab:
+                    tab.connections += 1
                 key = self.headers.get('Sec-WebSocket-Key', '')
                 accept = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
                 self.wfile.write(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
@@ -98,7 +104,8 @@ class FakeCDP:
                 if tab is None or tab.hang:
                     try:
                         conn.settimeout(30)
-                        conn.recv(65536)
+                        while conn.recv(65536):
+                            pass
                     except OSError:
                         pass
                     return
@@ -108,7 +115,12 @@ class FakeCDP:
                         return
                     req = json.loads(msg)
                     resp = cdp._dispatch(tab, req)
-                    _send_frame(conn, json.dumps(resp))
+                    if resp is None:
+                        return
+                    try:
+                        _send_frame(conn, json.dumps(resp))
+                    except OSError:
+                        return
 
         self._srv = HTTPServer(('127.0.0.1', 0), H)
         self.port = self._srv.server_address[1]
@@ -143,6 +155,16 @@ class FakeCDP:
         if m == 'DOM.setFileInputFiles':
             tab.files.append(p)
             return {'id': rid, 'result': {}}
+        if m == 'Runtime.enable':
+            tab.runtime_enabled = True
+            return {'id': rid, 'result': {}}
+        if m == 'Runtime.compileScript':
+            if not tab.runtime_enabled:
+                return {'id': rid, 'error': {'code': -32000, 'message': 'Runtime agent is not enabled'}}
+            expression = p.get('expression', '')
+            tab.compiled.append(expression)
+            error = tab.compile_responder(expression) if tab.compile_responder else None
+            return {'id': rid, 'result': {'exceptionDetails': {'text': str(error)}} if error else {}}
         if m != 'Runtime.evaluate':
             return {'id': rid, 'error': {'code': -32601, 'message': f"'{m}' wasn't found"}}
         expr = p.get('expression', '')
@@ -165,6 +187,10 @@ class FakeCDP:
         if tab.responder is not None:
             v = tab.responder(expr)
             if v is not NotImplemented:
+                if isinstance(v, ConnectionError):
+                    return None
+                if isinstance(v, Exception):
+                    return {'id': rid, 'result': {'exceptionDetails': {'text': str(v)}}}
                 return _val(rid, v)
         if expr in tab.answers:
             v = tab.answers[expr]

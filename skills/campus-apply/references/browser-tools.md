@@ -8,7 +8,7 @@
 - `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后每条命令都带 `--mark <ID>`。工作目录里已有这个域名的 `site-notes/<域名>.md` 时多打印一行 `NOTE site-notes/<域名>.md`，先读它再动手（`open` 同样）。跨域跳转会丢标记，`NO_MATCHING_TAB` 时重新 `list` 和 `claim`。证书错误页、浏览器内部页不允许写存储，报 `ERR_CLAIM`，先请用户把页面弄正常再认领。
 - `open <URL> [运行ID]`：自己新开并认领第二个标签页。
 - `exec <js文件>`：在认领的标签页执行 JS，输出最后一个表达式的值（字符串原样，其他打成 JSON）。
-- `stage <stage.js> [--libs …] [--max 秒]`：把库和 stage 脚本拼起来注入，每 2 秒轮询 `window.__calog` 到 DONE / ERR / 超时；注入只等注入本身，脚本在页内继续跑，超时后仍可用 `exec` 读日志。
+- `stage <stage.js> [--libs …] [--max 秒]`：把库和 stage 脚本拼起来注入，复用一次连接轮询本次运行的日志；`--max` 是定位、连接、注入及轮询的总时间预算，接受有限正数秒。只把终态日志行 `DONE` / `DONE …` 认作成功，错误、超时、旧运行或失联退出非零，不能只凭页面有值或退出0就省略内容回读。注入不等待脚本跑完；超时不撤销页内已执行的写入，先回读当前状态，不直接重跑。
 - `read-urls <列表> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N] [--stop-file 文件]`：按 `id<TAB>url` 列表逐个导航并读正文，带间隔与 guard；只适用于详情有独立 URL 的站点。几个标签页并行读时各进程给同一个 `--stop-file`：谁的 guard 报验证码或跳登录就写这个文件，其他进程读下一条前看到它就停并打印 `STOP stop-file`。
 - `type <选择器|js:表达式> <文本|@文件>`：像人打字一样写入一个文本框：真实鼠标点击取得焦点 → 全选 → 浏览器自己的输入路径写入 → 补 input / change / blur / focusout → 回读比对，一致输出 `typed <标签> <n>字 回读 <n>字 一致`，不一致 `ERR_TYPE`。文本以 `@` 开头就读文件（长文本、含换行或引号时用）。是 setter 写法三层回读不过时的兜底，见 apply-fill 的 controls.md。
 - `upload <选择器> <文件路径>`：把本地文件设到 `<input type=file>` 上（浏览器原生路径，触发 change），回读 `input.files` 的文件名；找不到控件 `NO_ELEMENT`，文件不存在 `ERR_NO_FILE`。只在用户明确要求代传时用。
@@ -26,5 +26,11 @@
 ## 出错约定
 `python3 chrome_cdp.py --help` 打印全部子命令的用法。`ERR_NO_CDP` 没有专用浏览器，直接 `launch`，不必重试；`NO_MATCHING_TAB` 认领的标签页找不到；`ERR_USAGE <子命令>` 参数不对；`ERR_CLAIM` 页面不允许写存储；`ERR_JS` 页内脚本抛异常；`ERR_CDP` 协议层出错或超时；`ERR_WRITE` 输出文件没写成（磁盘满、目录不可写）。都不吐 Traceback。
 
+一次执行同时保留stdout、stderr和退出码（工具返回或工作目录日志）。不要为分别查看输出、补报错原文而重新执行有写入效果的命令；明确失败后先只读核日志与当前值，有具体修正再按控件失败规矩有界尝试。同一失败stage未作修正时不重复跑。
+
 ## 环境变量
 `CA_CDP_PORT`（端口，默认 9222）、`CA_CDP_TIMEOUT`（单次应答超时秒数）、`CA_BROWSER`（浏览器可执行文件）、`CA_CHROME_PROFILE`（专用配置目录，默认 `~/campus-apply-chrome`）。
+
+可选 `CA_TIMING_FILE` 指向JSONL文件，stage追加命令、终态和秒数：总耗时、定位（含连接）、编译及注入、等待。不会写字段值或凭证；未设置时不新增文件，普通日志输出不变。这是工具计时，不是模型推理或人工等待时间。
+
+旧stage的单表达式和多语句均可注入：先做不执行的语法预检，最终只执行一次。单表达式返回的Promise异常可记为ERR；多语句内部未返回的异步任务仍需自己捕获并用`L('ERR …')`记日志。避免把用户填写的普通文本作为DONE/ERR终态行输出。

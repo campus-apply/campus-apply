@@ -76,3 +76,40 @@ def test_summary_skeleton_has_environment_and_agent_sections_and_lists_files(tmp
 def test_refuses_to_run_without_workspace_argument():
     r = run()
     assert r.returncode == 2 and '--workspace' in (r.stdout + r.stderr)
+
+
+def test_summary_is_complete_about_evidence_and_missing_conversation(tmp_path):
+    ws = tmp_path / 'ws'; make_workspace(ws)
+    out = tmp_path / 'out'
+    with (ws / 'log.txt').open('a', encoding='utf-8') as f:
+        f.write('ERR_STAGE 演示失败，联系 zs@example.com\n')
+    r = run('--workspace', str(ws), '--out', str(out))
+    assert r.returncode == 0
+    summary = (out / '反馈摘要.md').read_text(encoding='utf-8')
+    assert 'agent 补' not in summary and 'agent补' not in summary
+    assert '2 等用户回复' in summary and '执行清单_2026-01-01.md' in summary
+    assert 'ERR_STAGE' in summary and 'zs@example.com' not in summary
+    assert '未记录' in summary and '历史' in summary
+    assert '0 次' not in summary
+
+
+def test_installed_skill_without_repository_manifest_has_version_source(tmp_path):
+    import shutil
+    installed = tmp_path / 'installed-skill'
+    source = os.path.dirname(os.path.dirname(SCRIPT))
+    shutil.copytree(source, installed)
+    ws = tmp_path / 'ws'; make_workspace(ws)
+    out = tmp_path / 'out'
+    r = subprocess.run([sys.executable, str(installed / 'scripts/feedback_bundle.py'),
+                        '--workspace', str(ws), '--out', str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    text = (out / '反馈摘要.md').read_text(encoding='utf-8')
+    version = (installed / 'VERSION').read_text().strip()
+    assert version in text and 'VERSION' in text
+    assert '历史' in text and '未知' in text
+
+
+def test_missing_workspace_does_not_create_empty_feedback_package(tmp_path):
+    out = tmp_path / 'out'
+    r = run('--workspace', str(tmp_path / 'missing'), '--out', str(out))
+    assert r.returncode == 2 and not out.exists()

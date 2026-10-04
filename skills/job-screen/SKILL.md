@@ -5,7 +5,7 @@ description: "在一家公司的招聘官网上按用户偏好和硬要求筛岗
 
 # job-screen：在公司招聘页上筛岗位
 
-每一步都有"给用户看、等用户说"的停顿，不把两步并成一步。
+每一步都有"给用户看、等用户说"的停顿，不把两步并成一步。清单、待决和关联记录更新及交接按 `../campus-apply/references/workflow-state.md`。
 
 ## 前提
 - 当前目录有 `campus-apply.json`，其中 `preferences` 已填（没填先用 resume-facts 做偏好访谈）。
