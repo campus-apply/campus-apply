@@ -23,7 +23,8 @@
 
 ## 配套脚本
 - `guard.js`：验证码 / 登录跳转或登录弹窗 / 可见弹窗 / 浏览器错误页与上网认证跳转检测，返回 JSON；`blocked` 为 `browser-error`（证书错误、连不上）或 `captive-portal`（校园网、酒店网认证）时脚本无能为力，直接请用户在专用浏览器里处理。
-- `probe.js`：控件探测：标签、类型（`dropdown?` 表示像下拉，要行为探测定型）、`maxlength`、页面明文的字数要求 `hintLimit`、必填、`disabled` / `readonly`、当前值长度；证件、密码、验证码、手机、邮箱只报长度。
+- `probe.js`：控件探测：标签、类型（`dropdown?` 表示像下拉，要行为探测定型）、`maxlength`、页面明文的字数要求 `hintLimit`、必填、`disabled` / `readonly`、当前值长度、字段容器的 class（`wrapCls`，命名里常带控件类型线索）；证件、密码、验证码、手机、邮箱只报长度。
+  取值分三层：控件自己的 `value` → 容器里的内层输入控件 → 显示元素的文本，`valueFrom` 报出读自哪一层（`self` / `inner-input` / `display`）。三层都拿不到时报 `valueUnknown: true` 且 `valueLen: null`——**这是"读不出"，不是"是空的"**，不能据此补填或清空（容器型日期控件的值在内层 input 上，按容器读必然是空）。
 - `read_page.js`：正文文本与同站链接。
 - `lib_antd3.js`：控件操作的参考实现（`window.__ca`），stage 脚本用 `--libs` 引入。
 - `lib_fill.js`：`fill` 子命令的页内原语（`window.__caFill`），由 `fill` 自己注入，不用手动 `--libs`。里面有整页控件快照（一次调用读完，带可访问名称）、按 handle 的点击前校验、面板与选项查找、三层回读。回读模型层时从 React 的 `root.current` 找活动 fiber——元素上挂着的 `__reactFiber$` 在奇数次提交后指向旧分支，直接读它会把写对的值判成没写进去。

@@ -1,6 +1,11 @@
 // probe.js —— 只读探测：列出页面里可见的表单控件（标签、类型、maxlength、页面明文字数要求 hintLimit、必填、禁用/只读、当前值长度），按最近的标题分组。返回 JSON 字符串。
 // 结果是启发式的静态分类；kind 带问号（dropdown?）表示只是像下拉，按 apply-fill 的细则做一次无害的行为探测再定。
 // 证件号、密码、验证码、手机、邮箱这类字段只报长度，不输出内容；按标签、属性名（name/id/placeholder/autocomplete）和值的形态三路识别。
+//
+// 取值有一条硬规矩：**读不出值和确实是空，是两件事**。容器型控件（日期选择器、下拉）外层是
+// span/div，值挂在内层 input 上或显示元素的文本里；按容器读 innerText 永远得到空串，于是整类
+// 字段被报成"空"。下游看到"空"可能去补填，把用户填好的内容覆盖掉。所以取值分三层依次尝试，
+// 用 valueFrom 说明读自哪一层；三层都拿不到就报 valueUnknown，不报长度 0。
 (() => {
   // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
   // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
@@ -51,10 +56,21 @@
     if (!vis(el)) continue;
     const box = el.closest(BOX) || el;
     if (seen.has(box)) continue; seen.add(box);
-    let val = ('value' in el && typeof el.value === 'string') ? el.value : clean(box.innerText);
+    // 值的第一、二层：控件自己的 value，或容器里那个真正存值的输入控件。
+    // 容器型控件（antd3 的日期选择器外层是 span）走第二层；这里按 box 定界往里找，不往上找，
+    // 往上会在"多个控件共用一个字段容器"的结构里抓到隔壁字段的值。
+    const hasOwn = ('value' in el && typeof el.value === 'string');
+    // 判据是"这个节点自己有没有 value"，不是"box 和 el 是不是同一个"：Q 会直接选中容器本身
+    // （.ant-calendar-picker 这类），那时 box === el，而它恰恰正是最需要下钻的情形。
+    const innerValueEl = hasOwn ? null
+      : box.querySelector('input:not([type=hidden]), textarea, select');
+    const sources = [];
+    if (hasOwn) sources.push(['self', el.value]);
+    else if (el.isContentEditable) sources.push(['contenteditable', clean(el.innerText)]);
+    if (innerValueEl && typeof innerValueEl.value === 'string')
+      sources.push(['inner-input', innerValueEl.value]);
     const label = labelOf(box);
     let k = kind(box);
-    // 自定义下拉的通用特征：输入框旁有显示值元素 / 下拉箭头图标 / aria 弹出属性；命中就标"疑似下拉"，值取显示值
     // 字段容器不认框架 class：从输入框往上找，直到祖先里出现第二个输入控件为止
     let wrap = box, n = box.parentElement;
     for (let d = 0; n && n !== document.body && d < 5 && n.querySelectorAll('input:not([type=hidden]), textarea, select').length <= 1; d++) { wrap = n; n = n.parentElement; }
@@ -62,8 +78,17 @@
     const dispText = disp ? clean(disp.innerText) : '';
     const hasCaret = !!wrap.querySelector('[class*="caret"], [class*="arrow"], [class*="Arrow"], [class*="icon-down"], [class*="iconDown"], [class*="chevron"]');
     const hasPopup = el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-expanded') || el.getAttribute('role') === 'combobox';
-    if (k === 'text' && (hasPopup || dispText || (hasCaret && (el.readOnly || !val)))) k = 'dropdown?';
-    if (dispText && !val) val = dispText;
+    // 自定义下拉的通用特征：旁边有显示值元素 / 下拉箭头图标 / aria 弹出属性。
+    // 值的第三层：显示元素的文本（纯下拉选中后 input.value 常常仍是空的）。
+    if (dispText) sources.push(['display', dispText]);
+    // 取第一个非空的来源；全都空时，只有确实读到过某一层才敢说"空"。
+    const got = sources.find(([, v]) => v !== '') || sources[0] || null;
+    const valueUnknown = got === null;
+    const val = got ? got[1] : '';
+    const valueFrom = got ? got[0] : null;
+    // maxlength 属性基本只出现在真文本框上；有它的多半不是下拉（#112）
+    if (k === 'text' && !el.getAttribute('maxlength')
+        && (hasPopup || dispText || (hasCaret && (el.readOnly || !val)))) k = 'dropdown?';
     // 敏感字段：标签、属性名、值的形态三路判断，标签为空的手机框也要认出来
     const attrs = ['name', 'id', 'placeholder', 'autocomplete', 'inputcolname', 'data-field', 'aria-label'].map(a => el.getAttribute(a) || '').join(' ');
     const secretByText = /证件|身份证|护照|密码|password|验证码|captcha|银行卡|card|手机|电话|phone|mobile|\btel|邮箱|email|mail/i.test(label + ' ' + headingOf(box) + ' ' + attrs);
@@ -77,7 +102,12 @@
     controls.push({ i: controls.length, heading: headingOf(box), label, kind: k, maxlength: el.getAttribute('maxlength'),
       required: !!(box.closest('.ant-form-item-required, [class*="required"]') || /\*/.test(label)),
       disabled: !!el.disabled, readonly: !!el.readOnly, hintLimit,
-      valueLen: val.length, valuePreview: secret ? (val ? '【已隐藏】' : '') : val.slice(0, 30), tag: box.tagName.toLowerCase(), cls: String(box.className || '').slice(0, 80) });
+      valueLen: valueUnknown ? null : val.length, valueUnknown, valueFrom,
+      valuePreview: valueUnknown ? null : (secret ? (val ? '【已隐藏】' : '') : val.slice(0, 30)),
+      tag: box.tagName.toLowerCase(), cls: String(box.className || '').slice(0, 80),
+      // 字段容器的 class 常常自带控件类型线索（后缀 -Select- / date_info / string_info 之类）。
+      // 只把线索带回来交给模型认，不在这里硬编码任何站点的后缀表（#112）。
+      wrapCls: wrap === box ? '' : String(wrap.className || '').slice(0, 80) });
   }
   const headings = [...new Set([...document.querySelectorAll('h1,h2,h3,h4,[class*="title"],[class*="header"]')].filter(vis).map(h => clean(h.innerText)).filter(t => t && t.length < 40))].slice(0, 60);
   return JSON.stringify({ url: location.href, title: document.title, headings, controls });
