@@ -2,7 +2,17 @@
 // 结果是启发式的静态分类；kind 带问号（dropdown?）表示只是像下拉，按 apply-fill 的细则做一次无害的行为探测再定。
 // 证件号、密码、验证码、手机、邮箱这类字段只报长度，不输出内容；按标签、属性名（name/id/placeholder/autocomplete）和值的形态三路识别。
 (() => {
-  const vis = el => el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden';
+  // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
+  // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
+  // 优先用 checkVisibility（Chrome 105+ 一次把 display / visibility / opacity / content-visibility 都算上），
+  // 老浏览器退回"有布局盒子 + 没被 display:none / visibility:hidden"。
+  const vis = el => {
+    if (!el || !el.isConnected) return false;
+    if (typeof el.checkVisibility === 'function')
+      return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length > 0;
+  };
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const WRAP = '.ant-form-item, .ant-row, .el-form-item, [class*="form-item"], [class*="formItem"], [class*="FormItem"], li, tr';
   const labelOf = el => {

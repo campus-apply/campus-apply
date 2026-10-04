@@ -8,7 +8,7 @@ Campus-recruitment application skills for Chinese job sites, for Claude Code, Co
 
 它做四件事：把你的经历、口径、求职偏好和个人档案整理成带来源的本地文件；在公司招聘页上按你的偏好筛岗，全量清单和每个岗位的硬要求先给你看；对照岗位描述（JD）在你现有的简历 docx 上原地改出一页，并写网申长文本和自述；陪你逐页走完网申，每页先说清哪些它填、哪些要你做，按节奏填并回读。
 
-它不做：批量投递、自动提交、解验证码、填证件号和密码、在浏览器外调用招聘站点的接口或伪造请求参数、跨站抓取岗位。上传简历默认由你自己做，你明确说"帮我传"它才代传。
+它不做：批量投递、自动提交、解验证码、填证件号和密码、在浏览器外调用招聘站点的接口或伪造请求参数、跨站抓取岗位。简历附件默认由它代传（进了申请页第一件事就是传，好让站点先解析），你说"我自己传"就交给你；证件照、成绩单这类材料它会问你要文件。
 
 It keeps a sourced fact base with your preferences, screens jobs on a company's own careers page (full list and each posting's hard requirements shown to you first), tailors your existing resume docx in place, writes application essays, and walks you through the form page by page, telling you what it will fill and what you must do yourself, reading each page back. It never mass-applies, submits, solves captchas, touches ID or password fields, calls site APIs from outside the browser or forges request parameters, or scrapes across sites. You upload your resume yourself unless you explicitly ask it to.
 

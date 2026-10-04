@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构网申表单：填写执行器测试台</title>
+<!--
+  本地测试用的虚构网申页，不连任何招聘站，数据全是编的。
+  它刻意复刻了真实站点上踩过的坑，每个坑都标了出处，改填写执行器时对着它跑。
+
+  查询参数：
+    ?run=<标签>    草稿存进 localStorage 的哪个键，不给就用 manual
+    ?consent=1     进页面先弹隐私政策（默认不弹）
+    ?parse=<毫秒>  上传后"解析"耗时，默认 400
+
+  给测试用的接口（都是只读的，页面自己不调）：
+    window.fixtureTruth()   —— 真值，每个字段页面内部实际存着什么
+    window.fixtureSnapshot()—— 四层对照：显示值 / DOM value / 真值 / 已保存
+    window.fixtureAudit()   —— 行为审计：面板开着几个、提交点了没、每个字段提交过几次
+-->
+<style>
+body{font:16px/1.7 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
+.field{margin:14px 0;position:relative}
+.field>label{display:inline-block;width:120px;vertical-align:top;color:#555}
+input,textarea,select{font:inherit;padding:6px 8px;border:1px solid #bbb;border-radius:4px}
+input[type=text],input[type=email]{width:260px}
+textarea{width:520px;height:90px;vertical-align:top}
+input:disabled{background:#f2f2f2;color:#888}
+/* 必填星号走 CSS 伪元素，innerText 里读不到；容器 class 也不含 required。
+   复刻反馈7里"页面有星号、probe.required 却是 false"的现象（不是美团真实 class）。 */
+.fx-form-item--must>label::before{content:'*';color:#e03;margin-right:4px}
+.fx-select{display:inline-block;position:relative;width:260px}
+.fx-select-input{width:100%;cursor:pointer;background:#fff}
+.fx-panel{position:absolute;z-index:50;background:#fff;border:1px solid #bbb;border-radius:4px;
+  box-shadow:0 4px 14px rgba(0,0,0,.12);max-height:220px;overflow:auto;min-width:200px}
+.fx-panel ul{list-style:none;margin:0;padding:4px 0}
+.fx-select-item{padding:6px 14px;cursor:pointer}
+.fx-select-item:hover{background:#f0f6ff}
+.fx-cascader-col{display:inline-block;vertical-align:top;border-right:1px solid #eee;min-width:140px}
+.fx-upload{border:2px dashed #bbb;border-radius:6px;padding:22px;text-align:center;color:#777;cursor:pointer;width:520px}
+.fx-upload.on{border-color:#4a90d9;background:#f5faff}
+.fx-hint{color:#888;font-size:14px;margin-left:124px}
+.fx-error{color:#e03;font-size:14px;margin-left:124px;min-height:20px}
+.fx-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center}
+.fx-modal{background:#fff;border-radius:8px;padding:26px 30px;max-width:520px}
+.actions{margin:30px 0;display:flex;gap:12px}
+button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;background:#fff;cursor:pointer}
+button.primary{background:#ffc300;border-color:#ffc300}
+</style>
+
+<h1>虚构网申表单</h1>
+<p>本地测试台，所有岗位、单位、人名都是编的；这里没有真实投递。</p>
+
+<form id="form" autocomplete="off">
+  <h2>校招意向</h2>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="wish1">
+    <label>第一志愿</label>
+    <!-- 纯下拉：面板挂 body 下，选项 li.fx-select-item；选完自动收起 -->
+    <span class="fx-select" data-dropdown="wish1">
+      <input class="fx-select-input" id="wish1-input" readonly placeholder="请选择" data-display="wish1">
+    </span>
+  </div>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="dept">
+    <label>意向部门</label>
+    <!-- 级联：两级，第二级点了第一级才出现 -->
+    <span class="fx-select" data-cascader="dept">
+      <input class="fx-select-input" id="dept-input" readonly placeholder="请选择意向部门" data-display="dept">
+    </span>
+  </div>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="city">
+    <label>意向城市</label>
+    <!-- 可搜索下拉：要打字过滤再点选项；input.value 永远是搜索词，选中值显示在旁边 -->
+    <span class="fx-select" data-search="city">
+      <input class="fx-select-input" placeholder="请输入工作城市" id="city-search">
+      <span class="fx-display-value" data-display="city" style="position:absolute;left:9px;top:7px;pointer-events:none;background:#fff"></span>
+    </span>
+  </div>
+
+  <div class="field fx-form-item" data-key="transfer">
+    <label>　</label>
+    <!-- 有后果的开关，页面默认就勾上了：复刻反馈7里"接受其他职位调剂"默认勾选且全程没人提 -->
+    <label style="width:auto"><input type="checkbox" id="transfer" checked> 接受其他职位调剂</label>
+  </div>
+
+  <div class="field fx-form-item" data-key="resume">
+    <label for="file">简历附件</label>
+    <div class="fx-upload" id="drop">点击或将简历附件拖拽到这里上传<br><small>支持 doc、docx、pdf 格式（10M 以下）</small></div>
+    <input type="file" id="file" hidden accept=".doc,.docx,.pdf">
+    <p class="fx-hint" id="upload-state">尚未上传</p>
+  </div>
+
+  <h2>基础信息</h2>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="name">
+    <label for="name">姓名</label>
+    <input type="text" id="name" data-model="name">
+  </div>
+
+  <div class="field fx-form-item" data-key="gender">
+    <label>性别</label>
+    <!-- 这个下拉的面板选完不会自己收起，只认"点该字段的标签"；复刻 on-site-principles 里的收面板序列 -->
+    <span class="fx-select" data-dropdown="gender" data-sticky="1">
+      <input class="fx-select-input" id="gender-input" readonly placeholder="请选择" data-display="gender">
+    </span>
+  </div>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="phone">
+    <label for="phone">手机号码</label>
+    <!-- 账号级字段，禁用写不进；页面已带入值 -->
+    <input type="text" id="phone" value="13800000000" disabled>
+  </div>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="email">
+    <label for="email">邮箱</label>
+    <input type="email" id="email" data-model="email">
+  </div>
+
+  <div class="field fx-form-item fx-form-item--must" data-key="idcard">
+    <label for="idcard">证件号码</label>
+    <!-- 敏感字段：probe 只能报长度，回读只能记有值/长度 -->
+    <input type="text" id="idcard" data-model="idcard" placeholder="请输入证件号码">
+  </div>
+
+  <div class="field fx-form-item" data-key="birth">
+    <label for="birth">出生日期</label>
+    <!-- 只读日期框：页面脚本的 el.click() 打不开，只认 mousedown 序列（真实鼠标事件会带上） -->
+    <input type="text" id="birth" readonly placeholder="请选择日期" data-display="birth">
+  </div>
+
+  <h2>自我描述</h2>
+  <!-- 字数限制三层互相不一致：属性 2000、页面明文 200-1000、真正的校验 500。
+       明文提示必须和控件在同一个字段容器里，probe 才读得到 hintLimit——真实站点也是这么放的。 -->
+  <div class="field fx-form-item" data-key="statement">
+    <label for="statement">自我描述</label>
+    <textarea id="statement" maxlength="2000" data-model="statement"></textarea>
+    <p class="fx-hint">请填写 200-1000 字，介绍你的经历与求职动机。</p>
+    <p class="fx-error" id="statement-error"></p>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="cancel">取消</button>
+    <button type="button" id="stash">暂存</button>
+    <button type="button" class="primary" id="submit">投递</button>
+  </div>
+</form>
+
+<script>
+(() => {
+'use strict';
+const params = new URL(location.href).searchParams;
+const draftKey = 'fixture-apply-' + (params.get('run') || 'manual');
+const parseDelay = Number(params.get('parse') || 400);
+
+// ---- 真值：页面内部真正存着的东西。测试拿它当标尺，驱动代码不许直接读它。----
+const truth = {wish1:'', dept:'', city:'', transfer:true, name:'', gender:'', email:'',
+               idcard:'', birth:'', statement:'', resume:''};
+const commits = {};           // 每个字段提交过几次，fiber 双缓冲的奇偶就看它
+const audit = {submitClicked:0, stashClicked:0, cancelClicked:0, parsedAt:null};
+
+// ---- 假的 React 风格 fiber 双缓冲 ----
+// 真 React 在挂载时把 fiber 挂到 DOM 节点上（__reactFiber$xxx），之后更新走双缓冲：
+// 每次提交在 fiber 和它的 alternate 之间翻面，而节点上挂的那个引用不跟着改。
+// 于是"节点上挂的 fiber"在奇数次更新后指向旧分支，alternate 才是新值。
+// 这正是反馈7里姓名回读假阳性的成因：显示值和 DOM 都对，模型层说不对。
+// 正确读法是从 root.current 往下遍历找 stateNode === 元素的那个 fiber。
+const suffix = Math.random().toString(36).slice(2, 9);
+const FIBER_KEY = '__reactFiber$' + suffix;
+const CONTAINER_KEY = '__reactContainer$' + suffix;
+const hostRoot = {tag:3, stateNode:null, child:null, memoizedProps:null, return:null, alternate:null};
+hostRoot.stateNode = {current: hostRoot};
+document.getElementById('form')[CONTAINER_KEY] = hostRoot;
+
+function mountFiber(el, key) {
+  const a = {tag:5, stateNode:el, key, memoizedProps:{value:''}, return:hostRoot, child:null, sibling:null};
+  const b = {tag:5, stateNode:el, key, memoizedProps:{value:''}, return:hostRoot, child:null, sibling:null};
+  a.alternate = b; b.alternate = a;
+  el[FIBER_KEY] = a;                       // 挂载时挂上去，之后再也不改
+  a.sibling = hostRoot.child; hostRoot.child = a;
+  commits[key] = 0;
+  return a;
+}
+function commitFiber(key, value) {
+  // 找当前树里这个 key 的 fiber，翻到它的 alternate 当新的 current
+  let prev = null, node = hostRoot.child;
+  while (node && node.key !== key) { prev = node; node = node.sibling; }
+  if (!node) return;
+  const next = node.alternate;
+  next.memoizedProps = Object.assign({}, node.memoizedProps, {value});
+  next.sibling = node.sibling;
+  if (prev) prev.sibling = next; else hostRoot.child = next;
+  commits[key] = (commits[key] || 0) + 1;
+}
+
+// ---- 下拉、级联、可搜索下拉的数据 ----
+const OPTIONS = {
+  wish1: ['AI产品岗', '产品运营岗', '商业分析岗'],
+  gender: ['男', '女'],
+};
+const CASCADE = {'技术线': ['平台研发', '算法工程'], '商业线': ['商业分析', '战略研究']};
+const CITIES = ['北京市', '上海市', '深圳市', '成都市', '杭州市'];
+const openPanels = new Set();
+
+function closePanel(panel) { panel.remove(); openPanels.delete(panel); }
+function panelFor(anchor) {
+  const panel = document.createElement('div');
+  panel.className = 'fx-panel';
+  const box = anchor.getBoundingClientRect();
+  panel.style.left = (box.left + scrollX) + 'px';
+  panel.style.top = (box.bottom + scrollY + 2) + 'px';
+  document.body.appendChild(panel);        // 挂 body 下，要按位置和输入框配对
+  openPanels.add(panel);
+  return panel;
+}
+function setDisplay(key, text) {
+  document.querySelectorAll('[data-display="' + key + '"]').forEach(el => {
+    if ('value' in el && el.tagName === 'INPUT') el.value = text; else el.textContent = text;
+  });
+}
+
+// 纯下拉
+document.querySelectorAll('[data-dropdown]').forEach(box => {
+  const key = box.dataset.dropdown;
+  const input = box.querySelector('.fx-select-input');
+  input.addEventListener('click', () => {
+    if ([...openPanels].some(p => p.dataset.owner === key)) return;
+    const panel = panelFor(input);
+    panel.dataset.owner = key;
+    panel.innerHTML = '<ul>' + OPTIONS[key].map(o => '<li class="fx-select-item">' + o + '</li>').join('') + '</ul>';
+    panel.querySelectorAll('.fx-select-item').forEach(li => li.addEventListener('click', () => {
+      truth[key] = li.textContent;
+      setDisplay(key, li.textContent);
+      // data-sticky 的面板选完不收，只认点该字段的标签
+      if (!box.dataset.sticky) closePanel(panel);
+    }));
+  });
+});
+// 点字段标签时收起它自己的面板（sticky 面板唯一认的收法）
+document.querySelectorAll('.field').forEach(field => {
+  const label = field.querySelector(':scope > label');
+  if (!label) return;
+  label.addEventListener('click', () => {
+    const box = field.querySelector('[data-dropdown],[data-cascader],[data-search]');
+    const key = box && (box.dataset.dropdown || box.dataset.cascader || box.dataset.search);
+    if (key) [...openPanels].filter(p => p.dataset.owner === key).forEach(closePanel);
+  });
+});
+
+// 级联
+document.querySelectorAll('[data-cascader]').forEach(box => {
+  const key = box.dataset.cascader;
+  const input = box.querySelector('.fx-select-input');
+  input.addEventListener('click', () => {
+    if ([...openPanels].some(p => p.dataset.owner === key)) return;
+    const panel = panelFor(input);
+    panel.dataset.owner = key;
+    const first = document.createElement('div');
+    first.className = 'fx-cascader-col';
+    first.innerHTML = '<ul>' + Object.keys(CASCADE).map(o => '<li class="fx-select-item">' + o + '</li>').join('') + '</ul>';
+    panel.appendChild(first);
+    first.querySelectorAll('.fx-select-item').forEach(li => li.addEventListener('click', () => {
+      panel.querySelectorAll('.fx-cascader-col').forEach((c, i) => { if (i) c.remove(); });
+      const second = document.createElement('div');
+      second.className = 'fx-cascader-col';
+      second.innerHTML = '<ul>' + CASCADE[li.textContent].map(o => '<li class="fx-select-item">' + o + '</li>').join('') + '</ul>';
+      panel.appendChild(second);
+      second.querySelectorAll('.fx-select-item').forEach(leaf => leaf.addEventListener('click', () => {
+        truth[key] = li.textContent + ' / ' + leaf.textContent;
+        setDisplay(key, truth[key]);
+        closePanel(panel);
+      }));
+    }));
+  });
+});
+
+// 可搜索下拉：只打字不点选项不算选中
+document.querySelectorAll('[data-search]').forEach(box => {
+  const key = box.dataset.search;
+  const input = box.querySelector('.fx-select-input');
+  const render = () => {
+    [...openPanels].filter(p => p.dataset.owner === key).forEach(closePanel);
+    const term = input.value.trim();
+    const hits = CITIES.filter(c => !term || c.includes(term));
+    if (!hits.length) return;
+    const panel = panelFor(input);
+    panel.dataset.owner = key;
+    panel.innerHTML = '<ul>' + hits.map(o => '<li class="fx-select-item">' + o + '</li>').join('') + '</ul>';
+    panel.querySelectorAll('.fx-select-item').forEach(li => li.addEventListener('click', () => {
+      truth[key] = li.textContent;
+      setDisplay(key, li.textContent);
+      input.value = '';                    // 搜索框清空，选中值只在显示元素上
+      closePanel(panel);
+    }));
+  };
+  input.addEventListener('click', render);
+  input.addEventListener('input', render);
+});
+
+// 受控文本框：显示值、DOM value、fiber 模型三层各走各的
+document.querySelectorAll('[data-model]').forEach(el => {
+  const key = el.dataset.model;
+  mountFiber(el, key);
+  const sync = () => {
+    if (el.value === truth[key]) return;
+    truth[key] = el.value;
+    commitFiber(key, el.value);
+  };
+  el.addEventListener('input', sync);
+  el.addEventListener('change', sync);
+  el.addEventListener('blur', () => {
+    sync();
+    if (key === 'statement') {
+      // 三层限制里真正生效的那层：失焦时按 500 字校验，和 maxlength 属性、页面明文都不一样
+      const error = document.getElementById('statement-error');
+      error.textContent = el.value.length > 500 ? '最多 500 字，当前 ' + el.value.length + ' 字' : '';
+    }
+  });
+});
+
+// 只读日期框：只听 mousedown。页面脚本的 el.click() 只派发 click、不派发 mousedown，
+// 所以打不开；真实鼠标事件（CDP 的 mousePressed/mouseReleased）带 mousedown，能打开。
+// 这是 pitfalls 里"有的组件只认 mousedown"的那一类，antd 的日期面板就是这样。
+document.getElementById('birth').addEventListener('mousedown', event => {
+  if ([...openPanels].some(p => p.dataset.owner === 'birth')) return;
+  const panel = panelFor(event.currentTarget);
+  panel.dataset.owner = 'birth';
+  panel.innerHTML = '<ul>' + ['2001-02-14', '2002-07-03', '2003-11-28']
+    .map(d => '<li class="fx-select-item">' + d + '</li>').join('') + '</ul>';
+  panel.querySelectorAll('.fx-select-item').forEach(li => li.addEventListener('click', () => {
+    truth.birth = li.textContent;
+    setDisplay('birth', li.textContent);
+    closePanel(panel);
+  }));
+});
+
+// 上传与自动解析：解析质量故意很差，只能当占位，字段还得逐个重写
+const drop = document.getElementById('drop');
+const picker = document.getElementById('file');
+const uploadState = document.getElementById('upload-state');
+drop.addEventListener('click', () => picker.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('on'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('on'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('on');
+  if (e.dataTransfer.files.length) { picker.files = e.dataTransfer.files; picker.dispatchEvent(new Event('change', {bubbles:true})); }
+});
+picker.addEventListener('change', () => {
+  const file = picker.files[0];
+  if (!file) return;
+  truth.resume = file.name;
+  uploadState.textContent = '上传中…';
+  setTimeout(() => {
+    uploadState.textContent = '解析中…';
+    setTimeout(() => {
+      const apply = (key, value) => {
+        const el = document.querySelector('[data-model="' + key + '"]');
+        if (!el || el.value) return;                 // 已有值的不覆盖
+        el.value = value; truth[key] = value; commitFiber(key, value);
+      };
+      apply('name', '张 某某');                       // 解析件常见毛病：多余空格
+      apply('email', 'ZHANG.MOU@EXAMPLE.COM');        // 大小写乱掉
+      uploadState.textContent = '已上传：' + file.name + '（解析完成）';
+      audit.parsedAt = Date.now();
+    }, parseDelay);
+  }, 60);
+});
+
+// 隐私政策弹窗：class 是 fx-modal fx-confirm common_modal，不在 guard 的选择器清单里，
+// 复刻反馈7里 guard visibleModals=0 漏检的那次
+if (params.get('consent') === '1') {
+  const mask = document.createElement('div');
+  mask.className = 'fx-mask';
+  mask.innerHTML = '<div class="fx-modal fx-confirm common_modal"><h3>个人信息保护隐私政策</h3>' +
+    '<p>（虚构文本）本页面仅用于本地测试，不收集任何真实信息。</p>' +
+    '<button id="agree" class="primary">我已阅读并同意</button></div>';
+  document.body.appendChild(mask);
+  mask.querySelector('#agree').addEventListener('click', () => mask.remove());
+}
+
+// 按钮：暂存写 localStorage；投递只记一笔，永远不真的提交
+document.getElementById('stash').addEventListener('click', () => {
+  audit.stashClicked++;
+  localStorage.setItem(draftKey, JSON.stringify(truth));
+  uploadState.textContent = uploadState.textContent.replace(/（已暂存）$/, '') + '';
+});
+document.getElementById('submit').addEventListener('click', () => { audit.submitClicked++; });
+document.getElementById('cancel').addEventListener('click', () => { audit.cancelClicked++; });
+
+// 刷新后把暂存的值放回去
+const saved = JSON.parse(localStorage.getItem(draftKey) || 'null');
+if (saved) {
+  Object.keys(truth).forEach(key => { if (saved[key] !== undefined) truth[key] = saved[key]; });
+  document.querySelectorAll('[data-model]').forEach(el => {
+    const key = el.dataset.model;
+    if (truth[key]) { el.value = truth[key]; commitFiber(key, truth[key]); }
+  });
+  ['wish1', 'dept', 'city', 'gender', 'birth'].forEach(key => { if (truth[key]) setDisplay(key, truth[key]); });
+  document.getElementById('transfer').checked = !!truth.transfer;
+  if (truth.resume) uploadState.textContent = '已上传：' + truth.resume + '（解析完成）';
+}
+document.getElementById('transfer').addEventListener('change', e => { truth.transfer = e.target.checked; });
+
+// ---- 给测试用的只读接口 ----
+const TEXT_KEYS = ['name', 'email', 'idcard', 'statement'];
+const PICK_KEYS = ['wish1', 'dept', 'city', 'gender', 'birth'];
+window.fixtureTruth = () => JSON.parse(JSON.stringify(truth));
+window.fixtureSnapshot = () => ({
+  display: Object.fromEntries(PICK_KEYS.map(k => {
+    const el = document.querySelector('[data-display="' + k + '"]');
+    return [k, el ? (el.tagName === 'INPUT' ? el.value : el.textContent) : ''];
+  })),
+  dom: Object.fromEntries(TEXT_KEYS.map(k => [k, document.querySelector('[data-model="' + k + '"]').value])),
+  truth: window.fixtureTruth(),
+  saved: JSON.parse(localStorage.getItem(draftKey) || 'null'),
+});
+window.fixtureAudit = () => ({
+  openPanels: [...openPanels].length,
+  commits: JSON.parse(JSON.stringify(commits)),
+  // 节点上挂着的 fiber 是不是当前树里那个；奇数次提交后为 false，正是回读假阳性的条件
+  attachedFiberIsCurrent: Object.fromEntries(TEXT_KEYS.map(k => {
+    const el = document.querySelector('[data-model="' + k + '"]');
+    let node = hostRoot.child, found = null;
+    while (node) { if (node.stateNode === el) { found = node; break; } node = node.sibling; }
+    return [k, !!found && found === el[FIBER_KEY]];
+  })),
+  fiberKey: FIBER_KEY,
+  submitClicked: audit.submitClicked,
+  stashClicked: audit.stashClicked,
+  cancelClicked: audit.cancelClicked,
+  parsed: audit.parsedAt !== null,
+});
+})();
+</script>
+</html>

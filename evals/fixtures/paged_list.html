@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构分页清单：边界重复</title>
+<!--
+  复刻 2026-10-04 美团清单的现象：接口自报 total=24，但逐页拉下来有分页边界重复，
+  按响应行数数是 24 条、按唯一 ID 只有 22 个。真实原因多半是服务端排序不稳。
+  ?stable=1 关掉重复，用来确认正常情况不受影响。
+-->
+<h1>虚构分页清单</h1><p>本地测试台，数据全是编的。</p>
+<div id="out"></div>
+<script>
+(() => {
+'use strict';
+const TOTAL = 24, SIZE = 4, PAGES = 6;
+const stable = new URL(location.href).searchParams.get('stable') === '1';
+const all = Array.from({length: TOTAL}, (_, i) => ({id: 'J' + (1001 + i), name: '虚构岗位' + (i + 1)}));
+window.__fetchCount = 0;
+// 三种模式：
+//   stable=1  不重复，确认正常情况不受影响
+//   默认      偶发重复——第一次拉第 2、5 页时边界重叠（丢 ID），重拉同一页就正常了。
+//             这是服务端排序不稳的样子，也是美团那次最可能的情形，重拉应当能补齐。
+//   sticky=1  确定性重复——每次拉都重叠，重拉多少次都补不回来，应当尽早停下并如实报缺。
+const sticky = new URL(location.href).searchParams.get('sticky') === '1';
+const OVERLAP = stable ? [] : [2, 5];
+const served = new Set();
+window.fakeFetchPage = async (n) => {
+  window.__fetchCount++;
+  await new Promise(r => setTimeout(r, 10));
+  const start = (n - 1) * SIZE;
+  let slice = all.slice(start, start + SIZE);
+  const firstTime = !served.has(n);
+  served.add(n);
+  if (OVERLAP.includes(n) && start > 0 && (sticky || firstTime))
+    slice = [all[start - 1], ...slice.slice(1)];
+  return {items: slice, total: TOTAL, pages: PAGES};
+};
+})();
+</script>
+</html>

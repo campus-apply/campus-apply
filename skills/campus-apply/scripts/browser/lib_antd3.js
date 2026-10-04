@@ -23,7 +23,17 @@ window.__ca = (() => {
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  const visible = el => el && el.offsetParent !== null && getComputedStyle(el).display !== 'none';
+  // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
+  // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
+  // 优先用 checkVisibility（Chrome 105+ 一次把 display / visibility / opacity / content-visibility 都算上），
+  // 老浏览器退回"有布局盒子 + 没被 display:none / visibility:hidden"。
+  const visible = el => {
+    if (!el || !el.isConnected) return false;
+    if (typeof el.checkVisibility === 'function')
+      return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length > 0;
+  };
   const panelFor = inp => {
     const r = inp.getBoundingClientRect();
     return [...document.querySelectorAll('.ant-calendar-picker-container')].filter(visible)
@@ -95,7 +105,7 @@ window.__ca = (() => {
   async function del(entry) {
     const b = entry.querySelector(SITE.deleteBtn); if (!b) return false;
     b.click(); await sleep(500);
-    const modals = () => [...document.querySelectorAll(SITE.confirmModal)].filter(m => m.offsetParent !== null && SITE.confirmMatch.test(m.innerText));
+    const modals = () => [...document.querySelectorAll(SITE.confirmModal)].filter(m => visible(m) && SITE.confirmMatch.test(m.innerText));
     const m = modals().pop();
     if (!m) { L('del: no confirm modal'); return false; }
     const ok = [...m.querySelectorAll('.am-modal-button, button, a')].find(x => x.innerText.trim() === SITE.confirmText);

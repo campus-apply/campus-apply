@@ -13,6 +13,28 @@ python3 evals/run.py --harness claude --command /path/to/compatible-cli --skill-
 
 模拟表单由runner本地HTTP server持有，agent通过`portal.py`访问。runner独立记录读取、写入、保存、提交、错误及所属用户轮次；agent无法靠修改报告把错误写入抹掉。表单**允许**校级荣誉写入国家级字段，不靠硬校验替skill做决定。此适配器验证agent行为，不代表Chrome、CDP或真实招聘页面兼容性；真实控件/保存刷新另由工具层测。
 
+## 控件测试台（`fixtures/apply_form.html` + `fixture_check.py`）
+
+上面那套测 agent 的行为；这一套测**控件层**，不涉及模型。`fixtures/apply_form.html` 是一张虚构网申页，刻意复刻真实站点上踩过的坑：受控文本框、纯下拉、不自动收起的面板、可搜索下拉、两级级联、只听 `mousedown` 的只读日期框、拖拽上传加劣质自动解析、默认已勾选的"有后果的开关"、三层互不一致的字数限制，以及一套 React 风格的 fiber 双缓冲（奇数次提交后，节点上挂的 fiber 指向旧分支）。每个坑在 HTML 里标了出处。
+
+```sh
+python3 evals/fixture_check.py --out /private/fixture-check [--headless]
+```
+
+它用隔离的 Chrome 配置目录和独立端口，走和 skill 完全相同的 `chrome_cdp.py`，逐个断言这些坑真的按文档那样发作——不是"写在注释里"，而是"在真浏览器里复现"。全过按退出 0，任何一条不复现退出 1：要么 fixture 说了谎，要么驱动的行为变了。`--out` 必须在仓库之外。
+
+页面给测试留了三个只读接口：`window.fixtureTruth()`（页面内部的真值）、`window.fixtureSnapshot()`（显示值 / DOM value / 真值 / 已保存四层对照）、`window.fixtureAudit()`（开着几个面板、提交点了没、每个字段提交过几次、节点上的 fiber 是否仍是当前树里那个）。驱动代码不许读它们，它们只是判卷用的标尺。
+
+`fixtures/wizard_form.html` + `wizard_check.py` 专管分步表单：`?keep=1` 时第二步的字段一开始就在 DOM 里只是 `display:none`（antd Tabs 保留已挂载面板那类），`?keep=0` 时点了"下一步"才挂载。两种策略下 `fill` 的行为完全不同，所以两种都要测。它验证的核心规矩是**一份计划只写当前激活步骤**：把两步的字段混进一份计划必须退出非零、第二步的字段一个都不许写进去、原因要说准，而正确的"一步一份计划 + 显式翻页"要能把全部字段填对。
+
+```sh
+python3 evals/wizard_check.py --out /private/wizard-check [--headless]
+```
+
+`tests/test_fixture_check.py` 不开浏览器，只守住两个 fixture 的契约：每个坑的机制仍在页面里、接口仍在、checker 拒绝把产物写进仓库、可见性闸门和 `ERR_CONTEXT` 没被改掉。
+
+这个测试台不代表真实招聘页面兼容性：它只复刻我们见过的那些坑，没见过的站点仍要现场探测。
+
 ## 场景与判卷
 
 | case | 请求与初始资料 | 独立断言 |

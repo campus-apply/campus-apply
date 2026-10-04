@@ -15,6 +15,15 @@
   chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
         出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令复用连接轮询日志到 DONE / ERR / 超时（默认总预算 90 秒）；失败退出非零。
+  chrome_cdp.py --mark <运行ID> fill <计划.json> [--max 秒]
+        按计划把一整页字段连续填完，一次调用一份报告：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现
+        → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不用为每个字段写脚本。
+        计划 JSON：{"fields": [{...}], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}
+        每个 field：key / label（报告里显示）、selector（CSS）、index（同选择器第几个，默认 0）、
+        kind 取 text|dropdown|search|cascader|date|checkbox|native-select、value（级联是数组，逐级点）、
+        可选 term（可搜索下拉先打的词）、display_selector（值显示在别处时指明）、max（文本字数上限）、display（级联回读用的显示值）。
+        计划里的内容只当数据，不拼进 JS 执行；元素由 lib_fill.js 按 handle 持有，不让计划产出可执行代码。
+        全部填成且面板为零才打印 DONE 并退出 0；有字段没填成退出 1 并逐行说明原因，面板没收干净 ERR_PANELS。
   chrome_cdp.py --mark <运行ID> read-urls <列表文件> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N] [--stop-file 文件]
         列表每行 id<TAB>url。逐个把认领的标签页导航过去，等 --pace 秒（默认 1-2；公开页建议 0.3-0.6，登录后的页面 0.8-1.5），
         用 read_page.js 读正文存 <输出目录>/<id>.json；每 --guard-every（默认 5）个跑一次 guard.js，遇验证码/跳登录打印 STOP 并停。
@@ -289,6 +298,33 @@ def cmd_list(kw=''):
     return 0
 
 
+def no_tab_report(mark='', match='', deadline=None):
+    """认领的标签页找不到了——把"到底是什么情况"一次说清，别让调用方反复重试。
+
+    三种情况后续动作完全不同：浏览器整个关了（重开要用户同意，草稿多半已经没了）、
+    浏览器还在但那一页被关了、页面还在只是跳了域名丢了标记（重新认领就行）。
+    2026-10-04 的教训是只打印一行 NO_MATCHING_TAB，agent 分不清，就停在原地。
+    """
+    lines = ['NO_MATCHING_TAB']
+    try:
+        tabs = page_targets(deadline=deadline)
+    except (OSError, TabError, StageDeadline):
+        tabs = None
+    if tabs is None:
+        lines.append('BROWSER_GONE 专用浏览器已经不在了（端口 %d 没有响应）。'
+                     '没保存的内容多半已经没了；要继续就先问用户，再 launch 重开并请他重新登录。' % PORT)
+        return '\n'.join(lines), 'browser-gone'
+    if not tabs:
+        lines.append('NO_PAGES 浏览器还开着，但一个标签页都没有。先问用户发生了什么，不要自己开新页。')
+        return '\n'.join(lines), 'no-pages'
+    lines.append('OTHER_TABS 浏览器里还有 %d 个标签页：' % len(tabs))
+    for i, t in enumerate(tabs[:8], 1):
+        lines.append('  %d\t%s\t%s' % (i, (t.get('title') or '')[:40], (t.get('url') or '')[:90]))
+    lines.append('认领的那一页被关了或跳了域名丢了标记。先把上面这些列给用户确认是哪一个，'
+                 '再 claim 重新认领；不要默认挑第一个，也不要反复重试同一条命令。')
+    return '\n'.join(lines), 'other-tabs'
+
+
 def connect(target, deadline=None):
     try:
         return Tab(target, deadline=deadline)
@@ -442,7 +478,7 @@ def with_tab(fn):
         print(NO_CDP.format(port=PORT))
         return 2
     if tab is None:
-        print('NO_MATCHING_TAB')
+        print(no_tab_report(mark, match)[0])
         return 1
     try:
         return fn(tab)
@@ -549,10 +585,17 @@ TYPE_READ_JS = """(() => {{ const el = {expr}; if (!el) return null; window.__ca
 
 
 def element_expr(target):
-    """click / type 共用的目标写法：js: 表达式求值得到元素，否则是 CSS 选择器（取第一个可见匹配）。"""
+    """click / type 共用的目标写法：js: 表达式求值得到元素，否则是 CSS 选择器（取第一个可见匹配）。
+
+    可见性不用 offsetParent：它对 position:fixed 的元素恒为假，而弹窗里的按钮、挂在 body 下的
+    下拉面板项几乎都是 fixed 或绝对定位，用它会点不到（待处理 105）。
+    """
     if target.startswith('js:'):
         return target[3:]
-    return f'[...document.querySelectorAll({json.dumps(target)})].find(e => e.offsetParent !== null)'
+    return (f'[...document.querySelectorAll({json.dumps(target)})].find(e => '
+            "typeof e.checkVisibility === 'function' "
+            '? e.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}) '
+            ': e.getClientRects().length > 0)')
 
 
 def cmd_type(target, text):
@@ -615,6 +658,357 @@ def cmd_upload(selector, path):
     return with_tab(go)
 
 
+FILL_KINDS = ('text', 'dropdown', 'search', 'cascader', 'date', 'checkbox', 'native-select')
+
+
+def _fill_call(tab, expr):
+    """调一次 __caFill 的方法，返回解析好的结果；页内抛异常算 TabError。"""
+    v, err = tab.evaluate('JSON.stringify(' + expr + ')', await_promise=False)
+    if err:
+        raise TabError(err)
+    return json.loads(v) if v else None
+
+
+def _wait_for(tab, expr, want, budget):
+    """按条件等，不按秒等：反复求值直到满足 want(值)，或超过 budget 秒。返回 (是否满足, 最后的值)。
+    借 jev-ultrafast 的做法——真实站点的面板和建议项要等，但等的是状态而不是固定时长。"""
+    deadline = time.monotonic() + budget
+    value = None
+    while True:
+        value = _fill_call(tab, expr)
+        if want(value):
+            return True, value
+        if time.monotonic() >= deadline:
+            return False, value
+        time.sleep(0.03)
+
+
+def _panel_for(tab, handle, budget):
+    """找属于这个输入框的面板：横向有重叠、纵向紧挨（面板在下方或上方）。等到出现为止。
+    输入框的位置每次重新读——滚动会改变视口坐标，用解析时存下的旧位置会配不上。"""
+    def pick(state):
+        anchor = (state or {}).get('anchor')
+        if not anchor:
+            return None
+        best = None
+        for p in (state.get('panels') or []):
+            r = p['rect']
+            if r['x'] > anchor['x'] + anchor['w'] or r['x'] + r['w'] < anchor['x']:
+                continue                                    # 横向完全不重叠
+            gap = min(abs(r['y'] - (anchor['y'] + anchor['h'])), abs(anchor['y'] - (r['y'] + r['h'])))
+            if gap > 24:
+                continue                                    # 纵向离太远，不是这个字段的
+            if best is None or gap < best[0]:
+                best = (gap, p)
+        return best[1] if best else None
+
+    expr = ('(() => { const a = window.__caFill.aim(%d); '
+            'return {anchor: a.rect || null, panels: window.__caFill.panels()}; })()' % handle)
+    ok, state = _wait_for(tab, expr, lambda v: pick(v) is not None, budget)
+    return pick(state) if ok else None
+
+
+def _close_panels(tab, handle, budget):
+    """按 on-site-principles 的顺序收面板，第一个奏效就停；返回用的哪一招和是否收干净。
+    禁止 document.body.click()，禁止键盘事件。"""
+    def still_open():
+        return _panel_for(tab, handle, 0.12) is not None
+
+    if not still_open():
+        return 'already-closed', True
+    attempts = [
+        ('click-input-again', lambda: _real_click(tab, handle)),
+        ('click-field-label', lambda: _click_own_label(tab, handle)),
+        ('soft-click-label', lambda: _soft_click_label(tab, handle)),
+    ]
+    for name, action in attempts:
+        try:
+            action()
+        except TabError:
+            continue
+        if not still_open():
+            return name, True
+    return 'none', False
+
+
+def _own_label(tab, handle):
+    found = _fill_call(tab, f'window.__caFill.labelOf({handle})')
+    if not found or not found.get('handle'):
+        raise TabError('没找到该字段的标签')
+    return found['handle']
+
+
+def _click_own_label(tab, handle):
+    """发真实鼠标事件点这个控件所在字段容器里的 label（自定义下拉常常只认这一招）。"""
+    return _real_click(tab, _own_label(tab, handle))
+
+
+def _soft_click_label(tab, handle):
+    """最后一招：对标签派发合成点击（有的组件只在 mousedown/click 冒泡到容器时才收面板）。"""
+    return _fill_call(tab, f'window.__caFill.softClick({_own_label(tab, handle)})')
+
+
+def _real_click(tab, handle):
+    """发真实鼠标事件点一个 handle：执行前重新校验几何与遮挡，必要时先滚进视口。"""
+    aim = _fill_call(tab, f'window.__caFill.aim({handle})')
+    if aim and not aim['ok'] and aim.get('why') in ('offscreen', 'covered'):
+        _fill_call(tab, f'window.__caFill.scrollTo({handle})')
+        time.sleep(0.05)
+        aim = _fill_call(tab, f'window.__caFill.aim({handle})')
+    if not aim or not aim['ok']:
+        raise TabError('点不了：' + (aim or {}).get('why', '未知') + (
+            '（被 ' + aim['by'] + ' 挡住）' if aim and aim.get('by') else ''))
+    r = aim['rect']
+    mouse_click(tab, r['cx'], r['cy'])
+    return True
+
+
+def _verify(tab, handle, want, display_selector, kind):
+    """三层回读。显示值与 DOM 一致即通过；模型层只作参考，不单独否决（待处理 100）。"""
+    back = _fill_call(tab, 'window.__caFill.readback(%d, %s)'
+                      % (handle, json.dumps(display_selector) if display_selector else 'null'))
+    errors = _fill_call(tab, f'window.__caFill.errors({handle})') or []
+    dom, display, model = back.get('dom'), back.get('display'), back.get('model') or {}
+    if kind in ('dropdown', 'search', 'cascader', 'date'):
+        visible_ok = display == want                        # 这些控件的值在显示元素上，input.value 常常是空的
+    elif kind == 'checkbox':
+        visible_ok = True                                   # toggle 自己回读过
+    else:
+        visible_ok = dom == want
+    model_ok = (not model.get('found')) or model.get('value') == want
+    return dict(ok=bool(visible_ok) and not errors, visible_ok=bool(visible_ok),
+                model_found=bool(model.get('found')), model_ok=bool(model_ok),
+                model_via=model.get('via'), dom_len=len(dom) if isinstance(dom, str) else None,
+                display=display, errors=errors)
+
+
+def _fill_one(tab, item, waits):
+    """按一个字段的计划动作到位。返回 (是否成功, 记录字典)。不抛到外面。"""
+    kind, selector = item.get('kind', 'text'), item.get('selector', '')
+    want, label = item.get('value'), item.get('label') or item.get('key') or selector
+    record = dict(key=item.get('key') or label, kind=kind, label=label, status='failed')
+    if kind not in FILL_KINDS:
+        record['why'] = 'kind 不认识：' + str(kind)
+        return False, record
+    info = _fill_call(tab, 'window.__caFill.resolve(%s, %d)'
+                      % (json.dumps(selector), int(item.get('index', 0) or 0)))
+    if not info or info.get('error'):
+        record['why'] = {'not-found': '找不到控件', 'bad-selector': '选择器不合法'}.get(
+            (info or {}).get('error'), str((info or {}).get('error')))
+        return False, record
+    handle = info['handle']
+    record['resolved'] = dict(tag=info['tag'], name=info.get('name'),
+                              matched=info.get('matched'), visible=info.get('visible'))
+    if info.get('disabled'):
+        record.update(status='skipped', why='控件 disabled，写不进（账号级字段去账号设置页改）')
+        return False, record
+    # 在 DOM 里但不可见：多半是未激活的分步页、折叠板块或条件字段。这种控件写得进去、
+    # 三层回读还会通过（读到的就是刚写的值），但用户看不见，站点换步时也可能丢——
+    # 所以必须在这里拦住，否则报告会显示 OK 而实际上什么都没发生在用户眼前。
+    # 一份计划只写当前激活步骤的字段；下一步的字段等翻页后用新计划填。
+    if not info.get('visible'):
+        record['why'] = '控件在 DOM 里但不可见（多半在未激活的分步页或折叠板块里），没有写入'
+        return False, record
+
+    try:
+        if kind == 'text':
+            limit = item.get('max')
+            if limit and isinstance(want, str) and len(want) > int(limit):
+                record.update(why=f'文本 {len(want)} 字超过本字段上限 {limit} 字，没有写入')
+                return False, record
+            wrote = _fill_call(tab, 'window.__caFill.write(%d, %s)' % (handle, json.dumps(want)))
+            if not wrote.get('ok'):
+                record['why'] = '写不进：' + wrote.get('why', '未知')
+                return False, record
+
+        elif kind == 'native-select':
+            got = _fill_call(tab, 'window.__caFill.nativeSelect(%d, %s)' % (handle, json.dumps(want)))
+            if not got.get('ok'):
+                record['why'] = ('没有这个选项，页面上有：' + '、'.join(got.get('available', [])[:12])
+                                 if got.get('why') == 'no-option' else '选不上：' + str(got.get('why')))
+                return False, record
+
+        elif kind == 'checkbox':
+            got = _fill_call(tab, 'window.__caFill.toggle(%d, %s)'
+                             % (handle, 'true' if want else 'false'))
+            if not got.get('ok'):
+                record['why'] = '勾选状态没改成：' + str(got.get('why') or got.get('checked'))
+                return False, record
+            record['changed'] = got.get('changed')
+
+        else:
+            # 面板类：开面板 → 等出现 → 选 → 收面板 → 验证归零
+            steps = want if kind == 'cascader' and isinstance(want, list) else [want]
+            if kind == 'search':
+                _real_click(tab, handle)
+                term = item.get('term') or (steps[0] if isinstance(steps[0], str) else '')
+                wrote = _fill_call(tab, 'window.__caFill.write(%d, %s)' % (handle, json.dumps(term)))
+                if not wrote.get('ok'):
+                    record['why'] = '搜索词写不进：' + wrote.get('why', '未知')
+                    return False, record
+            else:
+                _real_click(tab, handle)
+            panel = _panel_for(tab, handle, waits['panel'])
+            if panel is None:
+                record['why'] = f"点了之后 {waits['panel']:g} 秒内没出现面板"
+                return False, record
+            record['panel'] = panel['cls'][:40]
+            for depth, step in enumerate(steps):
+                # 级联每点一级，下一级可能才渲染出来，所以每级都重新等选项
+                ok, got = _wait_for(
+                    tab, 'window.__caFill.option(%d, %s, true)' % (panel['handle'], json.dumps(step)),
+                    lambda v: bool(v and v.get('handle')), waits['option'])
+                if not ok:
+                    available = (got or {}).get('available', [])
+                    record['why'] = (f'第 {depth + 1} 级没有「{step}」'
+                                     + ('，面板里有：' + '、'.join(available[:12]) if available else ''))
+                    _close_panels(tab, handle, waits['panel'])
+                    return False, record
+                _real_click(tab, got['handle'])
+                if depth + 1 < len(steps):
+                    panel = _panel_for(tab, handle, waits['panel']) or panel
+            how, closed = _close_panels(tab, handle, waits['panel'])
+            record['closed_by'] = how
+            if not closed:
+                record['why'] = '选完了但面板收不起来'
+                return False, record
+            if kind == 'cascader' and isinstance(want, list):
+                want = item.get('display') or ' / '.join(want)
+
+    except TabError as e:
+        record['why'] = str(e)
+        return False, record
+
+    check = _verify(tab, handle, want, item.get('display_selector'), kind)
+    record['readback'] = check
+    if not check['ok']:
+        record['why'] = ('回读不一致：显示/DOM 读到 '
+                         + repr(check['display'] if kind != 'text' else check['dom_len'])
+                         + (('；页面报错：' + '、'.join(check['errors'])) if check['errors'] else ''))
+        return False, record
+    record['status'] = 'filled'
+    return True, record
+
+
+def cmd_fill(plan_path, max_seconds=120):
+    """按计划 JSON 在页内连续填完一页：开面板、按条件等、选中、收面板、三层回读，一次调用一份报告。
+
+    计划里的字段名、选择器、目标值只当数据用，不拼进 JS 执行；元素由 lib_fill.js 按 handle 持有。
+    """
+    try:
+        max_seconds = float(max_seconds)
+        if not (max_seconds > 0 and math.isfinite(max_seconds)):
+            raise ValueError
+    except (TypeError, ValueError):
+        print('ERR_USAGE fill: --max 需要一个有限正数秒数')
+        return 2
+    if not os.path.isfile(plan_path):
+        print(f'ERR_NO_FILE {plan_path}')
+        return 2
+    try:
+        with open(plan_path, encoding='utf-8') as f:
+            plan = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f'ERR_PLAN: 读不出计划 JSON：{e}')
+        return 2
+    if not isinstance(plan, (dict, list)):
+        print('ERR_PLAN: 计划要么是 {"fields": [...]}，要么直接是字段数组')
+        return 2
+    if isinstance(plan, list):
+        plan = {'fields': plan}                             # 裸数组是 {"fields": [...]} 的简写
+    items = plan.get('fields')
+    if not isinstance(items, list) or not items:
+        print('ERR_PLAN: 计划里没有 fields 数组')
+        return 2
+    if not all(isinstance(item, dict) for item in items):
+        print('ERR_PLAN: fields 里每一项都要是对象')
+        return 2
+    pace = plan.get('pace') if isinstance(plan.get('pace'), dict) else {}
+    try:
+        lo = float(pace.get('min', os.environ.get('PACE_MIN') or 0.3))
+        hi = float(pace.get('max', os.environ.get('PACE_MAX') or 0.8))
+        waits = {'panel': float(plan.get('panel_wait', 2.0)),
+                 'option': float(plan.get('option_wait', 2.0))}
+    except (TypeError, ValueError):
+        print('ERR_PLAN: pace / panel_wait / option_wait 要是数字')
+        return 2
+    if not all(0 <= v < 60 for v in (lo, hi, waits['panel'], waits['option'])) or hi < lo:
+        print('ERR_PLAN: pace 与等待秒数要在 0 到 60 之间，且 pace.max 不小于 pace.min')
+        return 2
+    started = time.monotonic()
+    deadline = started + max_seconds
+
+    def go(tab):
+        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
+            lib = f.read()
+        _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
+        if err:
+            print(f'ERR_JS: 注入填写库失败：{err}')
+            return 1
+        records, filled = [], 0
+        for item in items:
+            if time.monotonic() >= deadline:
+                records.append(dict(key=item.get('key') or item.get('selector'), status='not-started',
+                                    why=f'到了 {max_seconds:g} 秒预算，这个字段没开始'))
+                continue
+            try:
+                ok, record = _fill_one(tab, item, waits)
+            except TabError as e:
+                ok, record = False, dict(key=item.get('key') or item.get('selector'),
+                                         status='failed', why=f'ERR_CDP: {e}')
+            records.append(record)
+            filled += 1 if ok else 0
+            time.sleep(random.uniform(lo, hi))              # 字段间留间隔，节奏照 skill 的两档规矩
+        # 收尾的只读检查不能把账本烧掉：页面在填写期间导航过的话 window.__caFill 随旧文档消失，
+        # 这一行会抛异常。先把逐字段报告打出去，再报告上下文丢了。
+        lost = None
+        try:
+            left = _fill_call(tab, 'window.__caFill.panels().length')
+        except TabError as e:
+            left, lost = None, str(e)
+        report = dict(plan=os.path.basename(plan_path), total=len(items), filled=filled,
+                      open_panels=left, context_lost=lost,
+                      elapsed_seconds=round(time.monotonic() - started, 3), fields=records)
+        for r in records:
+            mark = {'filled': 'OK  ', 'skipped': 'SKIP', 'not-started': '----'}.get(r['status'], 'FAIL')
+            print(f"{mark} {r.get('label') or r.get('key')}"
+                  + (('  ' + r['why']) if r.get('why') else ''))
+        print('---')
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        bad = [r for r in records if r['status'] not in ('filled', 'skipped')]
+        if lost:
+            print(f'ERR_CONTEXT 页面在填写过程中变了（导航或重渲染），面板状态未知：{lost}')
+            print('上面逐字段的结果是页面变化之前的，先只读核对当前页面再决定补填哪些')
+            return 1
+        if left:
+            print(f'ERR_PANELS 还有 {left} 个面板开着')
+            return 1
+        if bad:
+            print(f'ERR_FILL {len(bad)}/{len(items)} 个字段没填成')
+            return 1
+        print(f'DONE {filled}/{len(items)} 个字段已填并回读一致，面板 0')
+        return 0
+
+    mark, match = os.environ.get('TAB_MARK', ''), os.environ.get('TAB_MATCH', '')
+    if not (mark or match):
+        print('ERR_NEED_TAB_MARK_OR_TAB_MATCH')
+        return 2
+    tab = find_tab(mark, match, deadline=deadline)
+    if tab == 'ERR_NO_CDP':
+        print(NO_CDP.format(port=PORT))
+        return 2
+    if tab is None:
+        print(no_tab_report(mark, match, deadline=deadline)[0])
+        return 1
+    try:
+        return go(tab)
+    except TabError as e:
+        print(f'ERR_CDP: {e}')
+        return 1
+    finally:
+        tab.close()
+
+
 def cmd_screenshot(out_path):
     def go(tab):
         tab.call('Page.bringToFront')
@@ -644,7 +1038,7 @@ def run_js(js_text, await_promise=True):
     if tab == 'ERR_NO_CDP':
         return 2, NO_CDP.format(port=PORT)
     if tab is None:
-        return 1, 'NO_MATCHING_TAB'
+        return 1, no_tab_report(mark, match)[0]
     try:
         v, err = tab.evaluate(js_text, await_promise)
     except TabError as e:
@@ -723,7 +1117,7 @@ def cmd_stage(stage_path, libs=(), max_seconds=90):
             print(NO_CDP.format(port=PORT))
             return 2
         if tab is None:
-            print('NO_MATCHING_TAB')
+            print(no_tab_report(mark, match, deadline=deadline)[0])
             return 1
         run_id = os.urandom(12).hex()
         # 捕获本次表达式的同步/Promise 异常；不监听页面其他未处理异常。
@@ -970,6 +1364,7 @@ USAGE = {
     'screenshot': 'screenshot <输出.png>',
     'click': 'click <选择器|js:表达式|x,y>（一个参数）',
     'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
+    'fill': 'fill <计划.json> [--max 秒]',
     'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
     'sniff': 'sniff <选择器|js:表达式|x,y>（一个参数）[--wait 秒]',
     'type': 'type <选择器|js:表达式> <文本|@文件>',
@@ -1043,6 +1438,19 @@ def main(argv):
             rest.append(args[i]); i += 1
         if len(rest) == 1:
             return cmd_stage(rest[0], libs, max_s)
+    if cmd == 'fill' and args:
+        max_s, rest = 120, []
+        i = 0
+        while i < len(args):
+            if args[i] == '--max':
+                if i + 1 >= len(args):
+                    print('ERR_USAGE fill: --max 缺少秒数')
+                    return 2
+                max_s = args[i + 1]; i += 2
+                continue
+            rest.append(args[i]); i += 1
+        if len(rest) == 1:
+            return cmd_fill(rest[0], max_s)
     if cmd == 'read-urls' and 2 <= len(args) <= 4:
         return cmd_read_urls(*args)
     if cmd == 'launch' and len(args) <= 1:

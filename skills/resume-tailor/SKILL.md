@@ -21,7 +21,7 @@ description: "对照一份 JD 产出针对该岗位的简历定稿文字、一�
 6. 渲染：
    - 用户有 docx（`campus-apply.json` 的 `resume_docx`，除非用户说不用）：先复制到投递目录、`docx_dump.py` 看结构；标题带横线（L）、抬头带制表位（T）、要点带项目符号（N）的模板直接 `python3 <本skill>/scripts/render_inplace.py resume.md 复制件.docx 输出.docx`（板块按顺序对应，数量不等会报错）；不符合这种结构的按 `references/docx-inplace.md` 在投递目录另写 `render.py`。然后 `docx_helpers.export_pdf_via_word` 导 PDF、`pdf_pages` 核页数、`pdftoppm -png -r 70` 出图自己看一眼版面；超页先压文字（删词、并句、去掉最弱的一条），不动字号边距，压两轮还超就停下给用户三个选项——再删一条要点（列出候选）、页边距略收、行距微调——用户选了再动，改了字号边距行距的要在改动清单里写明。成品 docx 和 PDF 放在工作目录根（命名 `简历_<姓名>_<公司><岗位简称>.docx/.pdf`），投递目录只留 `resume.md`、模板副本、预览图和改动清单。把 PDF 路径给用户，并在对话里逐条说明和基准简历相比改了什么：哪几条换了顺序、哪几条改写（改前改后各一句）、新增了什么、删了什么、为了压页删了哪些词；同时把逐段对比存成投递目录 `改动清单_<日期>.md`（用 python difflib 对比两份 docx 的段落文本即可）。
    - 没有 docx：`python3 <本skill>/scripts/render_basic.py resume.md 简历_<姓名>_<公司>.docx`。
-7. 如果这站有网申长文本：先让 apply-fill 做入口探测和上传试探（站点会自动解析简历时，先看解析填到了哪里、剩下哪些要写），再按 `templates/form.template.md` 写 `form.md`，字段名以 `fill-log.md` 里的探测结果为准，字数按 `limits.json`（每项可带 min / max / unit，来源是 apply-fill 探测出的页面明文和校验结果，与属性不一致时由用户定过）；与页面无关的内容（岗位要求的自述、证明材料段落）可以先起草给用户过目。写完跑 `check_content.py form.md --limits limits.json`。
+7. 网申长文本（`form.md` + `limits.json`）**不在这里做，留到 apply-fill 传完附件、探过字段之后**：字段名要以 `fill-log.md` 的探测结果为准，字数要按实测出来的 `limits.json`（每项可带 min / max / unit，来源是页面明文和失焦校验，与 `maxlength` 属性不一致时由用户定），而站点自动解析还可能已经把一部分内容填掉了——这些都得先看见页面才知道。所以第 6 步出了 PDF 就可以交给 apply-fill；它探完会回到本 skill 的第 7、8 步补 `form.md`。与页面无关、肯定要写的内容（岗位明确要求的自述、证明材料段落）可以先起草给用户过目。写完跑 `check_content.py form.md --limits limits.json`。
 8. 自我描述、自我评价、求职信这类替用户说话的自由文本：按 `references/self-statement.md` 的四步走——结构表给用户确认 → 初稿（观点段先要用户口述）→ 按 `references/humanizer.md` 逐条改并写改动总结与评分 → 全文加总结加评分给用户。简历要点和网申经历描述写完也过一遍 `humanizer.md`。不要一上来就写整段。
 9. 在工作目录 `log.txt` 追加：日期、岗位、主案例、问过什么、产出文件。
 
@@ -36,7 +36,7 @@ description: "对照一份 JD 产出针对该岗位的简历定稿文字、一�
 - [ ] 4 写 resume.md（要点 14–18 条）
 - [ ] 5 check_content：ERR 清零；WARN 列给用户 —— 等用户回复：
 - [ ] 6 渲染 docx + PDF；核页数；改动清单；逐条说明改了什么 —— 等用户回复：
-- [ ] 7 form.md + limits.json（在 apply-fill 探测与上传试探之后）
+- [ ] 7 form.md + limits.json（第 6 步出 PDF 后先交给 apply-fill 传附件并探字段，探完回来补这一步）
 - [ ] 8 自述四步：结构表 —— 等用户回复：；观点段口述 —— 等用户回复：；初稿 → humanizer 改稿总结与评分；全文 —— 等用户回复：
 - [ ] 9 log.txt
 ```

@@ -2,7 +2,8 @@ import os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SK = os.path.join(HERE, '..', 'skills')
 SCRIPTS = ['resume-tailor/scripts/docx_dump.py', 'resume-tailor/scripts/render_basic.py',
-           'resume-tailor/scripts/render_inplace.py', 'job-screen/scripts/screen_render.py']
+           'resume-tailor/scripts/render_inplace.py', 'job-screen/scripts/screen_render.py',
+           'job-screen/scripts/prescreen.py']
 
 
 def test_scripts_print_usage_instead_of_traceback_when_run_without_arguments():

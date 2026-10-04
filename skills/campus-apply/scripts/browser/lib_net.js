@@ -62,5 +62,89 @@ window.__caNet = window.__caNet || (() => {
     const j = parse(txt);
     return { status: r.status, ok: r.ok, type: r.headers.get('content-type'), data: j == null ? txt : j };
   }
-  return { log, hook, seen, capture, fetchJson, paced, sleep };
+  // 逐页拉清单并按 ID 去重，缺的页自动重拉。
+  //
+  // 为什么要在库里：2026-10-04 这段逻辑是现场写的，194 条响应只有 192 个唯一 ID，脚本退出 1，
+  // 然后靠人工核对 8/9/19/20 四页补回 2 条。分页边界重复在翻页接口里很常见（服务端排序不稳
+  // 就会出现），不该每次都把流程停下来让人介入。
+  //
+  //   pageFn(n)  第 n 页的拉取函数，返回 {items, total?, pages?}；items 是这一页的记录数组
+  //   idOf(item) 从一条记录里取唯一 ID；取不到的记录会被单独报出来，不混进去重
+  //   opts: {pages, total, min, max, retries, log}
+  //
+  // 返回 {items, ids, pagesRead, expected, missingPages, retried, noId, duplicates}。
+  // 自己不抛错：补齐了就把 duplicates 当一条异常记下来，调用方决定怎么报。
+  async function collect(pageFn, idOf, opts = {}) {
+    const min = opts.min == null ? 0.3 : opts.min;
+    const max = opts.max == null ? 0.6 : opts.max;
+    const retries = opts.retries == null ? 2 : opts.retries;
+    const byId = new Map();
+    const noId = [];
+    const duplicates = [];
+    const pageIds = new Map();        // 页码 → 这一页拿到的 ID
+    let expected = opts.total == null ? null : opts.total;
+    let pages = opts.pages == null ? null : opts.pages;
+
+    const take = async (n) => {
+      const got = await pageFn(n);
+      const items = (got && got.items) || [];
+      if (expected == null && got && got.total != null) expected = got.total;
+      if (pages == null && got && got.pages != null) pages = got.pages;
+      const ids = [];
+      for (const item of items) {
+        const id = idOf(item);
+        if (id == null || id === '') { noId.push(item); continue; }
+        const key = String(id);
+        ids.push(key);
+        if (byId.has(key)) duplicates.push({ id: key, page: n });
+        else byId.set(key, item);
+      }
+      pageIds.set(n, ids);
+      return items.length;
+    };
+
+    let n = 1;
+    while (true) {
+      const count = await take(n);
+      if (opts.log) opts.log(`PAGE ${n} 拿到 ${count} 条，累计唯一 ${byId.size}`);
+      if (pages != null && n >= pages) break;
+      if (pages == null && count === 0) break;
+      if (n > 500) break;             // 兜底，别被坏的 pages 带进死循环
+      n += 1;
+      await paced(min, max);
+    }
+    const pagesRead = n;
+
+    const firstPassDuplicates = duplicates.length;
+
+    // 去重后比接口自报的总数少：按页重拉，优先重拉出现过重复的页（重复多半出在分页边界）。
+    // 重复分两种，这里都要兜住：服务端排序不稳导致的偶发重复，重拉一次就补回来了；
+    // 真·确定性重复（每次拉同一页都返回同样的重叠）重拉多少次都没用——所以一轮下来没拿到
+    // 任何新 ID 就立刻停，不白跑，也不假装成功。
+    let retried = 0;
+    const suspect = [...new Set(duplicates.map(d => d.page))];
+    const order = suspect.length ? suspect : [...pageIds.keys()];
+    for (let round = 0; expected != null && byId.size < expected && round < retries; round++) {
+      const before = byId.size;
+      for (const page of order) {
+        if (byId.size >= expected) break;
+        const had = byId.size;
+        await paced(min, max);
+        await take(page);
+        retried += 1;
+        if (opts.log && byId.size > had) opts.log(`RETRY 第 ${page} 页补到 ${byId.size - had} 条`);
+      }
+      if (byId.size === before) {
+        if (opts.log) opts.log('RETRY 这一轮一条新的都没拿到，重复是确定性的，不再重试');
+        break;
+      }
+    }
+    const missingPages = expected != null && byId.size < expected
+      ? { expected, got: byId.size, short: expected - byId.size } : null;
+    return { items: [...byId.values()], ids: [...byId.keys()], pagesRead, expected,
+             missingPages, retried, noId, duplicates: firstPassDuplicates,
+             duplicatePages: suspect };
+  }
+
+  return { log, hook, seen, capture, fetchJson, paced, sleep, collect };
 })();

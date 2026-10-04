@@ -8,6 +8,11 @@
 - `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后每条命令都带 `--mark <ID>`。工作目录里已有这个域名的 `site-notes/<域名>.md` 时多打印一行 `NOTE site-notes/<域名>.md`，先读它再动手（`open` 同样）。跨域跳转会丢标记，`NO_MATCHING_TAB` 时重新 `list` 和 `claim`。证书错误页、浏览器内部页不允许写存储，报 `ERR_CLAIM`，先请用户把页面弄正常再认领。
 - `open <URL> [运行ID]`：自己新开并认领第二个标签页。
 - `exec <js文件>`：在认领的标签页执行 JS，输出最后一个表达式的值（字符串原样，其他打成 JSON）。
+- `fill <计划.json> [--max 秒]`：**写入表单字段的默认办法**。模型每页只产出一份计划 JSON，这一条命令在页内把整页连续填完：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现 → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不要再为每个字段现写 stage 脚本。
+  计划形状：`{"fields": [...], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}`（裸数组等于只给 fields）。每个字段：`key` / `label`（报告里显示）、`selector`（CSS）、`index`（同选择器第几个，默认 0）、`kind` 取 `text` / `dropdown` / `search` / `cascader` / `date` / `checkbox` / `native-select`、`value`（级联给数组，逐级点）；可选 `term`（可搜索下拉先打的词）、`display_selector`（值显示在别处时指明）、`max`（文本字数上限，取自 `limits.json`）、`display`（级联回读用的显示值）。
+  逐行打印 `OK` / `FAIL` / `SKIP` 和原因，再打一行 `---` 和完整 JSON 报告（每个字段的 handle 解析结果、用哪招收的面板、三层回读）。全部填成且打开的面板为零才打印 `DONE` 退出 0；有字段没填成退出 1，面板没收干净 `ERR_PANELS`，计划本身有问题 `ERR_PLAN`，页面在填写过程中导航或重渲染 `ERR_CONTEXT`（逐字段报告仍会打出来，但那是页面变化之前的状态）。**一份计划只写当前激活步骤里的字段**：在 DOM 里但不可见的控件（未激活的分步页、折叠板块）会被拒绝并说明原因，因为隐藏控件写得进去、回读还会通过，报成功就是假的。`fill` 不点下一步、保存、暂存、提交。
+  两条设计约束：计划里的字段名、选择器、目标值只当数据传进页面，不拼进 JS 执行；元素由 `lib_fill.js` 按 handle 持有，执行每个动作前重新校验元素还在、可见、没被遮住。可见性判定用 `checkVisibility`，不用 `offsetParent`（后者对 `position:fixed` 的元素恒为假）。
+  现写 stage 脚本仍然可用，但只用于**探测**；写入走 `fill`。本地测试台见 `evals/fixtures/apply_form.html` 与 `evals/fill_benchmark.py`。
 - `stage <stage.js> [--libs …] [--max 秒]`：把库和 stage 脚本拼起来注入，复用一次连接轮询本次运行的日志；`--max` 是定位、连接、注入及轮询的总时间预算，接受有限正数秒。只把终态日志行 `DONE` / `DONE …` 认作成功，错误、超时、旧运行或失联退出非零，不能只凭页面有值或退出0就省略内容回读。注入不等待脚本跑完；超时不撤销页内已执行的写入，先回读当前状态，不直接重跑。
 - `read-urls <列表> <输出目录> [起始行] [结束行] [--pace 最短-最长] [--guard-every N] [--stop-file 文件]`：按 `id<TAB>url` 列表逐个导航并读正文，带间隔与 guard；只适用于详情有独立 URL 的站点。几个标签页并行读时各进程给同一个 `--stop-file`：谁的 guard 报验证码或跳登录就写这个文件，其他进程读下一条前看到它就停并打印 `STOP stop-file`。
 - `type <选择器|js:表达式> <文本|@文件>`：像人打字一样写入一个文本框：真实鼠标点击取得焦点 → 全选 → 浏览器自己的输入路径写入 → 补 input / change / blur / focusout → 回读比对，一致输出 `typed <标签> <n>字 回读 <n>字 一致`，不一致 `ERR_TYPE`。文本以 `@` 开头就读文件（长文本、含换行或引号时用）。是 setter 写法三层回读不过时的兜底，见 apply-fill 的 controls.md。
@@ -21,6 +26,7 @@
 - `probe.js`：控件探测：标签、类型（`dropdown?` 表示像下拉，要行为探测定型）、`maxlength`、页面明文的字数要求 `hintLimit`、必填、`disabled` / `readonly`、当前值长度；证件、密码、验证码、手机、邮箱只报长度。
 - `read_page.js`：正文文本与同站链接。
 - `lib_antd3.js`：控件操作的参考实现（`window.__ca`），stage 脚本用 `--libs` 引入。
+- `lib_fill.js`：`fill` 子命令的页内原语（`window.__caFill`），由 `fill` 自己注入，不用手动 `--libs`。里面有整页控件快照（一次调用读完，带可访问名称）、按 handle 的点击前校验、面板与选项查找、三层回读。回读模型层时从 React 的 `root.current` 找活动 fiber——元素上挂着的 `__reactFiber$` 在奇数次提交后指向旧分支，直接读它会把写对的值判成没写进去。
 - `lib_net.js`：`window.__caNet`，stage 脚本用 `--libs` 引入：`hook()` 装记录钩子（幂等）；`seen(起始序号)` 取记录；`capture(fn)` 调用页面自己的函数并截住它这次收到的响应（返回记录数组，每条带解析好的 `json`）；`fetchJson(url, {method, body})` 在同一标签页里复发一个观察到的请求，返回 `{status, type, data}`；`paced(最短秒, 最长秒)` 随机停顿。规矩：只复发页面自己发过的地址和请求体、只改页码，不加参数、不改每页条数、不用页面没用过的接口。
 
 ## 出错约定

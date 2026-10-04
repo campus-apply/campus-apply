@@ -81,9 +81,42 @@ def test_exec_prints_err_js_on_exception(cdp, tmp_path):
 
 
 def test_exec_no_tab_with_mark_prints_no_matching_tab(cdp, tmp_path):
+    """认领的标签页找不到时，除了 NO_MATCHING_TAB 还要说清是哪种情况、下一步做什么。
+    只打一行的话 agent 分不清浏览器没了还是页被关了，就会停在原地（2026-10-04 反馈7）。"""
     cdp.add('bbb222', '工作页', 'https://x/').mark = 'other'
     r = run(cdp.port, 'exec', _js(tmp_path, '1'), env={'TAB_MARK': 'run1'})
-    assert r.stdout == 'NO_MATCHING_TAB\n' and r.returncode == 1
+    assert r.returncode == 1
+    assert r.stdout.startswith('NO_MATCHING_TAB\n')
+    assert 'OTHER_TABS' in r.stdout, '浏览器还在、还有别的标签页时要列出来'
+    assert '工作页' in r.stdout and 'https://x/' in r.stdout
+    assert '不要默认挑第一个' in r.stdout
+
+
+def test_no_matching_tab_says_the_browser_is_gone_when_the_port_is_dead(tmp_path):
+    """端口上没有浏览器时不能只说"找不到标签页"，要说清浏览器没了、草稿多半也没了。"""
+    import socket as _socket
+    with _socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        dead_port = sock.getsockname()[1]
+    r = run(dead_port, 'exec', _js(tmp_path, '1'), env={'TAB_MARK': 'run1'})
+    assert r.returncode == 2
+    assert 'ERR_NO_CDP' in r.stdout
+
+
+def test_no_tab_report_distinguishes_the_three_cases(cdp):
+    """直接测报告函数本身：浏览器没了 / 没有标签页 / 还有别的标签页，三种结论不同。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('chrome_cdp', SCRIPT)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    mod.PORT = cdp.port
+    text, kind = mod.no_tab_report('run1', '')
+    assert kind == 'no-pages' and 'NO_PAGES' in text
+    cdp.add('aaa111', '某页', 'https://a.example/')
+    text, kind = mod.no_tab_report('run1', '')
+    assert kind == 'other-tabs' and '某页' in text
+    mod.PORT = 1            # 这个端口上不会有浏览器
+    text, kind = mod.no_tab_report('run1', '')
+    assert kind == 'browser-gone' and 'BROWSER_GONE' in text and '没保存的内容' in text
 
 
 def test_exec_falls_back_to_tab_match_url_substring(cdp, tmp_path):
@@ -485,7 +518,9 @@ def RECT_FOR(selector):
     import importlib.util
     spec = importlib.util.spec_from_file_location('chrome_cdp', SCRIPT)
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-    return mod.RECT_JS.format(expr=f'[...document.querySelectorAll({json.dumps(selector)})].find(e => e.offsetParent !== null)')
+    # 用代码里的 element_expr 生成，别在测试里抄一份——抄的那份会和实现各走各的
+    # （2026-10-04 改可见性判法时就是这么漏掉的）。
+    return mod.RECT_JS.format(expr=mod.element_expr(selector))
 
 
 def test_sniff_usage_error_without_target(cdp):

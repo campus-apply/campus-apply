@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构分步表单：下一步才出现的字段</title>
+<!--
+  分步表单测试台。两种渲染策略各一半，因为 fill 的行为在两者下完全不同：
+    ?keep=1（默认）步骤二的字段一开始就在 DOM 里，只是 display:none —— 隐藏但能被脚本写进去
+    ?keep=0        步骤二点了"下一步"才挂载 —— 根本不在 DOM 里
+  真实站点两种都有（antd Tabs 保留已挂载面板属前者，条件渲染属后者）。
+-->
+<style>
+body{font:16px/1.7 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px}
+.step{border:1px solid #ddd;padding:16px;margin:14px 0}
+.step[hidden],.step.off{display:none}
+label{display:inline-block;width:120px;color:#555}
+input{font:inherit;padding:6px 8px;border:1px solid #bbb;border-radius:4px;width:240px}
+button{font:inherit;padding:8px 20px;margin-right:10px}
+</style>
+<h1>虚构分步表单</h1>
+<p>本地测试台，数据全是编的。</p>
+<div class="step" id="step1">
+  <h2>第一步：教育经历</h2>
+  <div><label for="school">学校名称</label><input id="school" data-model="school"></div>
+  <div><label for="major">专业名称</label><input id="major" data-model="major"></div>
+</div>
+<div class="step off" id="step2">
+  <h2>第二步：实践经历</h2>
+  <div><label for="org">单位名称</label><input id="org" data-model="org"></div>
+  <div><label for="role">担任职位</label><input id="role" data-model="role"></div>
+  <div><label for="agree" style="width:auto"><input type="checkbox" id="agree" style="width:auto"> 同意公开这段经历</label></div>
+</div>
+<div><button id="next">下一步</button><button id="prev" class="off">上一步</button></div>
+<script>
+(() => {
+'use strict';
+const keep = new URL(location.href).searchParams.get('keep') !== '0';
+const truth = {school:'', major:'', org:'', role:'', agree:false};
+const audit = {nextClicked:0, step:1};
+const step2 = document.getElementById('step2');
+const step2html = step2.innerHTML;
+if (!keep) step2.innerHTML = '';              // 条件渲染：压根不在 DOM 里
+
+function wire(root) {
+  root.querySelectorAll('[data-model]').forEach(el => {
+    const key = el.dataset.model;
+    const sync = () => { truth[key] = el.value; };
+    el.addEventListener('input', sync);
+    el.addEventListener('change', sync);
+    el.addEventListener('blur', sync);
+  });
+  const box = root.querySelector('#agree');
+  if (box) box.addEventListener('change', e => { truth.agree = e.target.checked; });
+}
+wire(document);
+document.getElementById('next').addEventListener('click', () => {
+  audit.nextClicked++; audit.step = 2;
+  document.getElementById('step1').classList.add('off');
+  if (!keep) { step2.innerHTML = step2html; wire(step2); }
+  step2.classList.remove('off');
+  document.getElementById('prev').classList.remove('off');
+});
+document.getElementById('prev').addEventListener('click', () => {
+  audit.step = 1;
+  step2.classList.add('off');
+  document.getElementById('step1').classList.remove('off');
+});
+window.wizardTruth = () => JSON.parse(JSON.stringify(truth));
+window.wizardAudit = () => ({...audit, keepMounted: keep,
+  step2InDom: !!document.getElementById('org'),
+  step2Visible: !!document.getElementById('org') &&
+    document.getElementById('org').checkVisibility({checkOpacity:true,checkVisibilityCSS:true})});
+})();
+</script>
+</html>
