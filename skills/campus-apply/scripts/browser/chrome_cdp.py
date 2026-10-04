@@ -19,6 +19,10 @@
         只读地把这一页摸清楚，一条命令抵十几次往返：确认渲染稳定（连探到控件数不变）、整页字段与语义坐标、
         probe 的控件属性、五路找上传位（直接的 input[type=file] / shadow DOM 递归 / 带 accept 的元素 /
         正文关键词 / iframe）。不点击、不写入、不开面板。摘要打到 stdout，明细写进输出文件。
+  chrome_cdp.py --mark <运行ID> probe-options <输出.json> [--only 字段1,字段2]
+        逐个打开面板类控件、读回全部选项、收起来、验证已关，结论写进一个文件。**这条会动页面**
+        （点开再收起），动手之前跟用户说一声；已经有值的字段自动跳过，不去碰它。
+        十几个下拉逐个探是十几次往返，在页内连着做完只要几秒——省的是往返之间浏览器干等的时间。
   chrome_cdp.py --mark <运行ID> plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]
         从页面生成计划骨架：字段的语义坐标（板块 / 第几条 / 标签 / 同标签第几个）由代码从 DOM 读出来，
         每个字段的 value 留成 null，模型只填值，不用自己维护一张下标表。disabled 的字段不列入，
@@ -1297,6 +1301,95 @@ def cmd_survey(out_path):
     return _with_claimed_tab(go)
 
 
+def cmd_probe_options(out_path, only=None):
+    """逐个打开面板类控件、读全部选项、收起来、验证已关，结论写进一个文件。
+
+    **这条命令会动页面**（点开控件、再收起来），和只读的 survey 分开就是为了这个：
+    动页面之前要跟用户说一声，表单里已经有内容时尤其要先问。
+
+    为什么值得单独做一条：十几个下拉逐个探，是十几次命令往返加十几次模型决策；
+    在页内连着做完只要几秒，而中间那些往返的时间浏览器全程闲着。
+    """
+    wanted = [k.strip() for k in (only or '').split(',') if k.strip()]
+
+    def go(tab):
+        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
+            lib = f.read()
+        _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
+        if err:
+            print(f'ERR_JS: 注入填写库失败：{err}')
+            return 1
+        fields = _fill_call(tab, 'window.__caFill.outline()')['fields']
+        out, learned = [], None
+        for f in fields:
+            key = ' / '.join(str(x) for x in
+                             (f['section'], f['occurrence'], f['label'], f['nth']) if x != '')
+            if wanted and key not in wanted and f['label'] not in wanted:
+                continue
+            if f['disabled'] or f['sensitive']:
+                continue
+            if f['tag'] == 'select':                         # 原生 select 不用点开
+                got = _fill_call(tab, 'window.__caFill.nativeSelect(%d, %s)'
+                                 % (f['handle'], json.dumps('\u0000')))
+                opts = (got or {}).get('available') or []
+                out.append(dict(key=key, label=f['label'], kind='native-select',
+                                options=opts, count=len(opts)))
+                continue
+            if f['valueLen']:
+                out.append(dict(key=key, label=f['label'], skipped='这个字段已经有值，没有去点它'))
+                continue
+            _fill_call(tab, 'window.__caFill.watchStart()')
+            try:
+                _real_click(tab, f['handle'])
+            except TabError as e:
+                out.append(dict(key=key, label=f['label'], error=str(e)))
+                continue
+            panel = _panel_for(tab, f['handle'], 2.0)
+            if panel is None:
+                out.append(dict(key=key, label=f['label'], kind='text?',
+                                note='点了没出现面板，多半是普通文本框'))
+                continue
+            opts = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % panel['handle']) or []
+            how, closed = _close_panels(tab, f['handle'], 2.0, learned)
+            if how in CLOSE_TRICKS:
+                learned = how
+            out.append(dict(key=key, label=f['label'],
+                            kind='search' if f['maxlength'] else 'dropdown',
+                            options=opts[:200], count=len(opts),
+                            closed_by=how, closed=closed))
+            if not closed:
+                print(f'STOP 「{f["label"]}」的面板收不起来，先停下，不再往下探')
+                break
+            time.sleep(random.uniform(0.2, 0.5))
+        still = _fill_call(tab, 'window.__caFill.stillOpen()') or []
+        where = _fill_call(tab, 'location.href')
+        report = dict(url=where, close_trick=learned,
+                      open_panels=len(still), fields=out)
+        try:
+            with open(out_path, 'w', encoding='utf-8') as fh:
+                json.dump(report, fh, ensure_ascii=False, indent=1)
+        except OSError as e:
+            print(f'ERR_WRITE {out_path}：{e}')
+            return 1
+        for row in out:
+            if row.get('options') is not None:
+                print(f"{row['label']}\t{row['count']} 项\t"
+                      + '、'.join(row['options'][:8])
+                      + ('…' if row['count'] > 8 else ''))
+            else:
+                print(f"{row['label']}\t{row.get('note') or row.get('skipped') or row.get('error')}")
+        print('---')
+        print(f'OPTIONS {len(out)} 个控件探过'
+              + (f'，收面板用的是 {learned}' if learned else '')
+              + f' → {out_path}')
+        if still:
+            print(f'ERR_PANELS 我们开的面板还有 {len(still)} 个没收掉')
+            return 1
+        return 0
+
+    return _with_claimed_tab(go)
+
+
 def cmd_screenshot(out_path):
     def go(tab):
         tab.call('Page.bringToFront')
@@ -1649,6 +1742,7 @@ USAGE = {
     'fill': 'fill <计划.json> [--max 秒]',
     'survey': 'survey <输出.json>',
     'plan-skeleton': 'plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]',
+    'probe-options': 'probe-options <输出.json> [--only key1,key2]',
     'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
     'sniff': 'sniff <选择器|js:表达式|x,y>（一个参数）[--wait 秒]',
     'type': 'type <选择器|js:表达式> <文本|@文件>',
@@ -1753,6 +1847,19 @@ def main(argv):
             return cmd_fill(rest[0], max_s)
     if cmd == 'survey' and len(args) == 1:
         return cmd_survey(args[0])
+    if cmd == 'probe-options' and args:
+        only, rest = None, []
+        i = 0
+        while i < len(args):
+            if args[i] == '--only':
+                if i + 1 >= len(args):
+                    print('ERR_USAGE probe-options: --only 缺少字段列表')
+                    return 2
+                only = args[i + 1]; i += 2
+                continue
+            rest.append(args[i]); i += 1
+        if len(rest) == 1:
+            return cmd_probe_options(rest[0], only)
     if cmd == 'plan-skeleton' and args:
         skip_ok, rest = None, []
         i = 0

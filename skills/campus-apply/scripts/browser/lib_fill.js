@@ -400,6 +400,20 @@
       return out;
     },
 
+    // 面板里当前能看到的全部选项文本。探一次就把整张选项表拿回来，比逐个试便宜得多。
+    optionsIn(panelHandle) {
+      const panel = get(panelHandle);
+      if (!panel) return [];
+      const seen = [];
+      for (const el of panel.querySelectorAll(OPTION_SEL)) {
+        if (!visible(el)) continue;
+        if (el.querySelector(OPTION_SEL)) continue;          // 只要叶子节点
+        const text = clean(el.innerText);
+        if (text && !seen.includes(text)) seen.push(text);
+      }
+      return seen;
+    },
+
     // 在某个面板里按文本找选项。exact 为真要求完全相等（菜单没过滤完时，"唯一项"往往不是目标值）。
     option(panelHandle, text, exact) {
       const panel = get(panelHandle);
