@@ -9,7 +9,7 @@
 
 ## 两种点法
 - 页面脚本里的 `el.click()` 是合成事件，多数控件认，但有的控件只认真实鼠标事件。脚本点了没反应、面板不出现，就换 `chrome_cdp.py --mark <ID> click <目标>`：它通过浏览器发真实鼠标事件，目标可以是 CSS 选择器、`js:` 表达式（求值得到元素，适合按文本找菜单项）或视口坐标。
-- 探控件类型时，"合成点击没反应、真实点击有反应"也是一条结论，记进站点笔记，同一站后面直接用 `click`。
+- 探控件类型时，"合成点击没反应、真实点击有反应"是**本页**的结论：本页后面的同类控件直接用 `click`，但不写进站点笔记——换一页可能就不一样。
 - 有的站点把没提交的表单内容存在浏览器本地存储（`localStorage`）里，刷新也不消失；要撤销试探性写入，先看有没有这样的键，删掉再刷新。哪个站怎么存，探到了记站点笔记。
 
 ## antd 3.x
@@ -27,7 +27,7 @@
 - antd 4/5：日期是 `.ant-picker`，下拉是 `.ant-select` + `.ant-select-dropdown`（结构与 3.x 不同，选项是 `.ant-select-item-option`）；面板同样挂 body 下，按位置匹配的思路不变，选择器要现场看。
 - Element UI（Vue）：`.el-input__inner`、`.el-select` + `.el-select-dropdown`、`.el-date-editor`；赋值同样要用原型 setter + input 事件。
 - 原生 `<select>`：直接改 `value` 再派发 `change`。
-- 现场探测：先跑 `probe.js` 看 `kind` 和 `cls`，再决定用哪套写法；写成功后记进站点笔记。
+- 现场探测：先跑 `survey`（或 `probe.js`）看 `kind`、`cls` 和 `wrapCls`，再决定用哪套写法。
 - class 带发版哈希后缀（如 Moka 的 `search-LvPmRxVfY4`）：用前缀匹配 `[class^="search-"]` 或 `[class*="search-"]`，不要写死整个 class。
 
 ## Moka（`sd-` 前缀组件）
