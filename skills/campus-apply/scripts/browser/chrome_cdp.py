@@ -648,6 +648,27 @@ def cmd_type(target, text):
 UPLOAD_READ_JS = """(() => {{ const el = document.querySelector({sel}); window.__caUploadRead = 1;
   return JSON.stringify(el && el.files ? [...el.files].map(f => f.name) : []); }})()"""
 
+# 上传成功的佐证要从页面上找，不能只看 input.files：站点在 change 回调里取走文件、
+# 随即清空控件是常规做法（防重复提交、释放引用），越规范的站点越会这么干。回读为空
+# 只说明"读不出来了"，不说明没传成——而把它当成失败会诱发重传，有的站点重传会二次
+# 弹出破坏性确认框。所以另外看：页面上有没有出现这个文件名、有没有新的弹窗或进度条。
+UPLOAD_EVIDENCE_JS = """(() => {{ const name = {name}; const stem = {stem};
+  const text = document.body ? (document.body.innerText || '') : '';
+  const vis = el => el && el.isConnected && (typeof el.checkVisibility === 'function'
+    ? el.checkVisibility({{ checkOpacity: true, checkVisibilityCSS: true }})
+    : el.getClientRects().length > 0);
+  const words = ['上传中', '解析中', '上传成功', '解析完成', '已上传', '上传失败', '正在上传'];
+  return JSON.stringify({{
+    fileNameOnPage: text.includes(name) || (stem.length >= 4 && text.includes(stem)),
+    statusWords: words.filter(w => text.includes(w)),
+    progressBars: [...document.querySelectorAll(
+      'progress, [role=progressbar], [class*="progress"], [class*="Progress"]')]
+      .filter(vis).length,
+    dialogs: [...document.querySelectorAll(
+      '[role=dialog], [role=alertdialog], dialog[open], [aria-modal="true"]')]
+      .filter(vis).length,
+  }}); }})()"""
+
 
 def cmd_upload(selector, path):
     path = os.path.abspath(path)
@@ -661,14 +682,35 @@ def cmd_upload(selector, path):
         if not node:
             print(f'NO_ELEMENT {selector}')
             return 1
-        tab.call('DOM.setFileInputFiles', files=[path], nodeId=node)
-        v, err = tab.evaluate(UPLOAD_READ_JS.format(sel=json.dumps(selector)))
-        if err:
-            print(f'ERR_JS: {err}')
+        try:
+            tab.call('DOM.setFileInputFiles', files=[path], nodeId=node)
+        except TabError as e:
+            print(f'ERR_UPLOAD 文件没送进控件：{e}')
             return 1
-        names = json.loads(v or '[]')
-        print(f"uploaded {os.path.basename(path)} → input.files {len(names)} 个：{'、'.join(names)}")
-        return 0 if names else 1
+        # 走到这里说明浏览器已经把文件交给了控件。后面读到什么都只是佐证，不是判据。
+        base = os.path.basename(path)
+        v, err = tab.evaluate(UPLOAD_READ_JS.format(sel=json.dumps(selector)))
+        names = [] if err else json.loads(v or '[]')
+        ev, ev_err = tab.evaluate(UPLOAD_EVIDENCE_JS.format(
+            name=json.dumps(base), stem=json.dumps(os.path.splitext(base)[0])))
+        evidence = {} if ev_err else json.loads(ev or '{}')
+        if names:
+            print(f"uploaded {base} → input.files {len(names)} 个：{'、'.join(names)}")
+        else:
+            hints = []
+            if evidence.get('fileNameOnPage'):
+                hints.append('页面上出现了文件名')
+            if evidence.get('statusWords'):
+                hints.append('页面状态文字：' + '、'.join(evidence['statusWords']))
+            if evidence.get('progressBars'):
+                hints.append(f"{evidence['progressBars']} 个进度条")
+            if evidence.get('dialogs'):
+                hints.append(f"{evidence['dialogs']} 个弹窗（可能是确认框，先读它再动）")
+            print(f'uploaded {base} → 控件已被站点清空（取走文件后清空是常规做法，不是失败）'
+                  + ('；' + '，'.join(hints) if hints else
+                     '；页面上暂时看不到佐证，接下来只读核对上传区再决定下一步'))
+        print('不要因为回读不到文件名就重传——有的站点重传会弹出破坏性确认框')
+        return 0
     return with_tab(go)
 
 

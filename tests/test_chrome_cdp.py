@@ -632,7 +632,8 @@ def test_upload_sets_file_on_input_and_reads_back_names(cdp, tmp_path):
     r = run(cdp.port, 'upload', 'input[type=file]', str(pdf), env={'TAB_MARK': 'run1'})
     assert r.returncode == 0, r.stdout + r.stderr
     assert t.files == [{'files': [str(pdf)], 'nodeId': 42}]
-    assert r.stdout.strip() == 'uploaded 简历.pdf → input.files 1 个：简历.pdf'
+    assert 'uploaded 简历.pdf → input.files 1 个：简历.pdf' in r.stdout
+    assert '不要因为回读不到文件名就重传' in r.stdout, '每次上传都要带上这条提醒'
 
 
 def test_upload_refuses_missing_file_and_missing_element(cdp, tmp_path):

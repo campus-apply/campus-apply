@@ -52,6 +52,30 @@ ALIASES = {
     'date': ('date', 'firstPostTime', 'refreshTime', 'publishTime', '发布日期'),
 }
 
+# --map 的目标键既认内部英文键，也认 --help 字段表里列的中文显示名：文档列中文、
+# 代码只认英文，用户照文档写就会匹配不上，而且是静默失效——整列数据全空、不报错。
+FIELD_ALIASES = {
+    '标题': 'title', '岗位': 'title', '岗位名称': 'title',
+    '类别': 'cat', '职类': 'cat',
+    '地点': 'loc', '工作地点': 'loc', '城市': 'loc',
+    '职责': 'duty', '职责正文': 'duty', '岗位职责': 'duty',
+    '要求': 'req', '要求正文': 'req', '岗位要求': 'req',
+    '性质': 'nature', '招聘类型': 'nature',
+    '链接': 'url', '网址': 'url',
+    '编号': 'jobId', '站内编号': 'jobId',
+    '部门': 'org', '单位': 'org',
+    '发布日期': 'date', '日期': 'date',
+}
+
+
+def field_key(name):
+    """把用户写的目标键解析成内部键；认不出返回 None（由调用方报错，不要静默忽略）。"""
+    name = (name or '').strip()
+    if name in ALIASES:
+        return name
+    return FIELD_ALIASES.get(name)
+
+
 # 学历层级：数字越大要求越高
 DEGREES = [('专科', 1), ('大专', 1), ('本科', 2), ('学士', 2), ('硕士', 3), ('研究生', 3),
            ('博士', 4), ('MBA', 3)]
@@ -155,18 +179,23 @@ def judge(row, prefs, facts_degree):
         return '排除', f'偏好：不投「{word}」类岗位（类别命中）', evidence
 
     # 3. 海外地点。
-    # 不枚举城市名：实测美团的海外地点是利雅得、迪拜、科威特城、圣保罗这些，任何写死的清单都会漏。
-    # 改成反过来判——国内地级市在招聘站上几乎一律写成"××市"（或直辖市、自治区、特别行政区），
-    # 列出来的地点里只要有一个不符合这个形状，就当成海外候选。
+    # 枚举城市名会漏：实测的海外地点里有利雅得、迪拜、科威特城、圣保罗这些，清单写不全。
+    # 但反过来按形状判国内（"××市/省/自治区"）同样会漏，只是漏的方向反了——新区、开发区、
+    # 县、旗、盟都不带"市"字，照这个判法会被当成海外直接排除掉。
+    # 所以这里只分三种：**确定是国内**、**确定是海外**、**判不出**。判不出归待定，不排除。
     if not prefs.get('overseas', True) and row['loc']:
         places = [p.strip() for p in re.split(r'[、,，/；;]+', row['loc']) if p.strip()]
-        odd = [p for p in places if not DOMESTIC_PLACE.search(p)]
-        if odd:
-            inland = [p for p in places if DOMESTIC_PLACE.search(p)]
-            if inland:
-                # 既有国内也有海外：岗位可能两地都招，不替用户决定
-                return '待定', f'地点里有国内也有境外（{"、".join(odd)}），要你定投不投', row['loc']
-            return '排除', f'偏好：不投海外（地点 {"、".join(odd)}）', row['loc']
+        inland = [p for p in places if DOMESTIC_PLACE.search(p)]
+        overseas = [p for p in places if OVERSEAS_PLACE.search(p)]
+        unknown = [p for p in places if p not in inland and p not in overseas]
+        if overseas and not inland and not unknown:
+            return '排除', f'偏好：不投海外（地点 {"、".join(overseas)}）', row['loc']
+        if overseas and (inland or unknown):
+            return '待定', f'地点里有境外（{"、".join(overseas)}）也有别的，要你定投不投', row['loc']
+        if unknown and not inland:
+            # 读不出是国内还是海外，就说读不出。排除要能说出依据，说不出就不排除。
+            return '待定', (f'认不出「{"、".join(unknown)}」是国内还是海外'
+                            '（不带"市/省"字样的新区、开发区、县都会落到这里），要你看一眼'), row['loc']
     if not prefs.get('overseas', True) and not row['loc']:
         for word in ('海外', 'Overseas', '国际化业务'):
             if word in title:
@@ -210,6 +239,12 @@ TAIL = re.compile(r'(岗位|岗|类|型|的)+$')   # "纯销售型岗" 要一路
 # 国内地点在招聘站上的写法：地级市带"市"，少数写成省/自治区/特别行政区或直辖市简称。
 # 用它反过来认海外，比枚举海外城市名可靠（见 judge 里第 3 条的说明）。
 DOMESTIC_PLACE = re.compile(r'(市|省|自治区|特别行政区|不限|全国|国内|远程|北京|上海|广州|深圳|天津|重庆)')
+# 确定是境外的正面判据：整段是拉丁字母或带这些词。和上面的国内判据都命中不了的，
+# 就是"判不出"，不替用户归类。
+OVERSEAS_PLACE = re.compile(r'^[A-Za-z][A-Za-z\s.\-\']*$|海外|境外|'
+                            r'新加坡|东京|首尔|曼谷|吉隆坡|雅加达|马尼拉|迪拜|利雅得|'
+                            r'伦敦|巴黎|柏林|阿姆斯特丹|纽约|硅谷|旧金山|西雅图|多伦多|'
+                            r'悉尼|墨尔本|圣保罗|墨西哥城')
 
 
 def keywords_from(entries):
@@ -337,7 +372,13 @@ def main(argv=None):
         if not target or not source:
             print(f'ERR_USAGE prescreen: --map 要写成 目标键=来源键，收到 {item!r}')
             return 2
-        extra_map[target.strip()] = source.strip()
+        key = field_key(target)
+        if key is None:
+            print(f'ERR_USAGE prescreen: 不认识的目标键 {target.strip()!r}，可用：'
+                  + ' / '.join(ALIASES) + '，中文名也认：'
+                  + '、'.join(sorted(set(FIELD_ALIASES))))
+            return 2
+        extra_map[key] = source.strip()
 
     prefs, prefs_note = load_prefs(args.prefs)
     degree, degree_from = read_degree(args.facts)

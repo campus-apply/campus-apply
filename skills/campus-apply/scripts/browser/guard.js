@@ -52,15 +52,23 @@ window.__caGuard = function () {
     '[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], ' +
     '[class*="mask"], [class*="Mask"], [class*="overlay"], [class*="Overlay"], ' +
     '[class*="popup"], [class*="Popup"]')].filter(el => vis(el) && modalShape(el));
-  // 只留最外层，遮罩和它里面的内容不算两个
-  const outerModals = modalNodes.filter(n => !modalNodes.some(o => o !== n && o.contains(n)));
+  // 去重分两步。按包含关系只留最外层，去掉"遮罩套着弹窗体"那种嵌套；但遮罩和弹窗体
+  // 常常是**兄弟节点**、互不包含（antd 的 mask 与 wrap 就是），按包含关系去不掉，
+  // 于是一个弹窗数成两个，"是不是又弹了一个"这个判断就没法做了。
+  // 第二步按内容：没有任何文本的那个是纯遮罩，不算一个弹窗。
+  const hasText = el => ((el.innerText || '').replace(/\s+/g, '').length > 0);
+  const outermost = modalNodes.filter(n => !modalNodes.some(o => o !== n && o.contains(n)));
+  const withText = outermost.filter(hasText);
+  // 全是空的（只有遮罩、内容还没渲染出来）时不要报零——那也是"页面上压着一层东西"。
+  const outerModals = withText.length ? withText : outermost;
   const visibleModals = outerModals.length;
+  const maskOnly = outermost.length - withText.length;
   const modalText = outerModals.map(n => (n.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120));
   // 浏览器自己的错误页（证书、连不上）和校园网 / 酒店网的认证跳转：脚本什么都做不了，直接请用户处理
   const errorPage = /^chrome-error:\/\//.test(url) || /^(about|edge):/.test(url) && url !== 'about:blank';
   const errorWords = ['您的连接不是私密连接', '你的连接不是专用连接', 'Your connection is not private', 'NET::ERR_', '无法访问此网站', '找不到服务器', 'This site can’t be reached', 'This site can\'t be reached', 'ERR_CONNECTION', 'ERR_CERT'].filter(k => text.includes(k) || document.title.includes(k));
   const portalWords = ['校园网', '上网认证', '网络认证', 'Portal 认证', '认证登录', '宽带认证', 'captive portal', 'Wi-Fi 登录'].filter(k => text.slice(0, 3000).includes(k) || document.title.includes(k));
   const blocked = errorPage || errorWords.length > 0 ? 'browser-error' : portalWords.length > 0 ? 'captive-portal' : '';
-  return { url, title: document.title, captcha: hits.length > 0 || words.length > 0, captchaHits: hits, captchaWords: words, loginRedirect, loginWords, loggedIn, identityHits, identityWords, visibleModals, modalText, blocked, blockedWords: errorWords.concat(portalWords), ts: Date.now() };
+  return { url, title: document.title, captcha: hits.length > 0 || words.length > 0, captchaHits: hits, captchaWords: words, loginRedirect, loginWords, loggedIn, identityHits, identityWords, visibleModals, modalText, maskOnly, blocked, blockedWords: errorWords.concat(portalWords), ts: Date.now() };
 };
 JSON.stringify(window.__caGuard());

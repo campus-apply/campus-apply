@@ -47,7 +47,10 @@ def test_upload_comes_before_filling_fields():
     text = APPLY_FILL.read_text(encoding='utf-8')
     assert '第一件事是传简历 PDF 附件' in text, 'the entry step must put the upload first'
     upload = UPLOAD_DOC.read_text(encoding='utf-8')
-    assert '先传附件，再填字段' in upload
+    # 顺序不变（有上传位的页面上，附件先于字段），变的是判定时机：按页探，不按流程阶段定。
+    assert '传附件永远排在填字段之前' in text
+    assert '先探一次有没有上传位' in upload
+    assert '不要停下来问' in upload, '本页没有上传位时不该停下来问'
     assert '不要先填字段再传附件' in upload, 'the wrong order must be called out explicitly'
 
 
