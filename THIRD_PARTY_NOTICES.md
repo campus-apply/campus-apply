@@ -35,7 +35,7 @@ SOFTWARE.
 ## Humanizer-zh（歸藏）
 - 来源：https://github.com/op7418/Humanizer-zh
 - 上游：https://github.com/blader/humanizer （MIT）；规则清单的原始依据是维基百科 "Signs of AI writing" 页面（https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing ，CC BY-SA 4.0）；实用工具部分参考 https://github.com/hardikpandya/stop-slop 。
-- 用于：`skills/resume-tailor/references/style-rules.md` 的 AI 写作痕迹规则名与检查思路。本仓库用自己的话复述规则，不引用维基百科的例句。
+- 用于：`skills/resume-tailor/references/humanizer.md` 的句子层规则名、检查思路与"个性与灵魂"一节（本仓库改称"光是干净还不够"），以及 `skills/resume-tailor/references/style-rules.md` 的 AI 写作痕迹规则名。本仓库用自己的话复述规则，不引用维基百科的例句；同文件的结构层规则（第 25 到 33 条）与评分表的结构维度为本仓库原创，不属于上游内容。
 - 许可：MIT License, Copyright (c) 2026 歸藏
 
 ```
