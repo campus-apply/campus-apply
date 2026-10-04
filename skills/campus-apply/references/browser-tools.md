@@ -8,8 +8,15 @@
 - `claim <序号|targetId> [运行ID]`：认领，往页面写运行 ID，输出 ID 与 URL，之后每条命令都带 `--mark <ID>`。工作目录里已有这个域名的 `site-notes/<域名>.md` 时多打印一行 `NOTE site-notes/<域名>.md`，先读它再动手（`open` 同样）。跨域跳转会丢标记，`NO_MATCHING_TAB` 时重新 `list` 和 `claim`。证书错误页、浏览器内部页不允许写存储，报 `ERR_CLAIM`，先请用户把页面弄正常再认领。
 - `open <URL> [运行ID]`：自己新开并认领第二个标签页。
 - `exec <js文件>`：在认领的标签页执行 JS，输出最后一个表达式的值（字符串原样，其他打成 JSON）。
+- `survey <输出.json>`：**进了一个表单页先跑它**。只读地一次把这页摸清：渲染稳没稳（连探到控件数不变）、整页字段与它们的语义坐标、probe 的控件属性、五路找上传位（直接的 `input[type=file]`、shadow DOM 递归、带 `accept` 的元素、正文关键词、iframe）。摘要打到屏幕上，明细写进输出文件。不点击、不写入、不开面板——会开面板的行为探测是另一回事，要先跟用户说一声。
+  探测慢不在浏览器，在命令之间的往返和抄表：真正动页面的只有几秒。能一次读完的就别分十几次读。
+- `plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]`：**生成计划骨架，模型只填值**。字段的语义坐标由代码从 DOM 读出来（板块 / 第几条记录 / 字段标签 / 同标签第几个），每个字段的 `value` 留成 `null`，`kind` 先按静态特征猜、探明白了自己改。`disabled` 的字段不列入，敏感字段标注出来。
+  `--skip-ok` 指向上一次的 `fill` 报告：标 `filled` 的字段这次不再列出，只补没填成的那些，不必为了几个失败字段把整页长文本重写一遍。
+  不要自己手写一张控件下标表。整页一百多个字段时，手抄一遍、写计划时再按新下标算一遍，是实测里最大的两段纯等待；而且加一组条目全局下标就变了，要重新映射一遍。
 - `fill <计划.json> [--max 秒]`：**写入表单字段的默认办法**。模型每页只产出一份计划 JSON，这一条命令在页内把整页连续填完：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现 → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不要再为每个字段现写 stage 脚本。
-  计划形状：`{"fields": [...], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}`（裸数组等于只给 fields）。每个字段：`key` / `label`（报告里显示）、`selector`（CSS）、`index`（同选择器第几个，默认 0）、`kind` 取 `text` / `dropdown` / `search` / `cascader` / `date` / `checkbox` / `native-select`、`value`（级联给数组，逐级点）；可选 `term`（可搜索下拉先打的词）、`display_selector`（值显示在别处时指明）、`max`（文本字数上限，取自 `limits.json`）、`display`（级联回读用的显示值）。
+  计划形状：`{"fields": [...], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}`（裸数组等于只给 fields）。每个字段：`key` / `label`（报告里显示）、`kind` 取 `text` / `dropdown` / `search` / `cascader` / `date` / `checkbox` / `native-select`、`value`（级联给数组，逐级点）；可选 `term`（可搜索下拉先打的词）、`display_selector`（值显示在别处时指明）、`max`（文本字数上限，取自 `limits.json`）、`display`（级联回读用的显示值）。
+  **定位有两种写法，优先语义**：`section` / `occurrence` / `label` / `nth`（板块、第几条记录、字段标签、同一条记录里同名标签的第几个），由 `plan-skeleton` 生成；`selector` + `index` 仍然接受，用于骨架覆盖不到的场合。两者都给时语义优先，报告里的 `via` 标明走的哪条。语义坐标加条目不失效、写错了只是找不到；`index` 是纯位置量，错一位就操作到完全无关的控件，而最敏感的字段往往恰好排在最前面。
+  可选 `expect_label`：声明这个控件的可访问名称应当含什么，执行前校验，对不上就报"控件身份校验不通过"并且不动它。**声明权在模型，执行权在代码。** 证件号、出生日期、密码、银行卡这类字段一律跳过，除非该字段显式写了 `sensitive_ok`（而且该由用户拍板）。
   逐行打印 `OK` / `FAIL` / `SKIP` 和原因，再打一行 `---` 和完整 JSON 报告（每个字段的 handle 解析结果、用哪招收的面板、三层回读）。全部填成且打开的面板为零才打印 `DONE` 退出 0；有字段没填成退出 1，面板没收干净 `ERR_PANELS`，计划本身有问题 `ERR_PLAN`，页面在填写过程中导航或重渲染 `ERR_CONTEXT`（逐字段报告仍会打出来，但那是页面变化之前的状态）。**一份计划只写当前激活步骤里的字段**：在 DOM 里但不可见的控件（未激活的分步页、折叠板块）会被拒绝并说明原因，因为隐藏控件写得进去、回读还会通过，报成功就是假的。`fill` 不点下一步、保存、暂存、提交。
   两条设计约束：计划里的字段名、选择器、目标值只当数据传进页面，不拼进 JS 执行；元素由 `lib_fill.js` 按 handle 持有，执行每个动作前重新校验元素还在、可见、没被遮住。可见性判定用 `checkVisibility`，不用 `offsetParent`（后者对 `position:fixed` 的元素恒为假）。
   现写 stage 脚本仍然可用，但只用于**探测**；写入走 `fill`。本地测试台见 `evals/fixtures/apply_form.html` 与 `evals/fill_benchmark.py`。

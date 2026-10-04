@@ -35,14 +35,16 @@
     if (aria) return clean(aria);
     const labels = el.labels ? [...el.labels].map(l => clean(l.innerText)).filter(Boolean) : [];
     if (labels.length) return clean(labels.join(' '));
-    // 字段容器里的 label：从控件往上找，直到祖先里出现第二个输入控件为止
-    let wrap = el, node = el.parentElement;
-    for (let d = 0; node && node !== document.body && d < 5
-         && node.querySelectorAll('input:not([type=hidden]),textarea,select').length <= 1; d++) {
-      wrap = node; node = node.parentElement;
+    // 字段容器里的 label：从控件往上找，找到第一个带 label 的祖先就用它。
+    // 不能一见到"第二个输入控件"就停——站点常把年/月、起/止两个框放在同一个 label 底下，
+    // 那样会一个标签都取不到，而空标签既定位不了字段，也会把按标签分组的逻辑带偏。
+    // 共用同一个 label 的控件拿到相同的名字是对的，靠语义坐标的第四维区分它们。
+    for (let node = el.parentElement, d = 0; node && node !== document.body && d < 5;
+         node = node.parentElement, d++) {
+      const own = node.querySelector(':scope > label, :scope > * > label');
+      if (own && !own.contains(el) && clean(own.innerText))
+        return clean(own.innerText).slice(0, 60);
     }
-    const own = wrap !== el ? wrap.querySelector('label') : null;
-    if (own && clean(own.innerText)) return clean(own.innerText).slice(0, 60);
     return clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder')) || '');
   };
 
@@ -67,6 +69,13 @@
     return { x: r.x, y: r.y, w: r.width, h: r.height,
              cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
   };
+
+  // 写错一个下标就会操作到完全无关的控件，而这几类字段恰好排在表单最前面（索引 0 附近）。
+  // 命中就拒绝写入和点击，除非计划里为这个字段显式写了 sensitive_ok。
+  const SENSITIVE = /证件|身份证|护照|军官证|港澳|台胞|密码|password|验证码|captcha|银行卡|开户|账号|card|出生|生日|birth/i;
+  const isSensitive = el => SENSITIVE.test(nameOf(el) + ' '
+    + ['name', 'id', 'placeholder', 'autocomplete', 'aria-label']
+        .map(a => el.getAttribute && el.getAttribute(a) || '').join(' '));
 
   const register = el => {
     for (const [id, known] of store) if (known === el) return id;
@@ -141,6 +150,123 @@
       }
       return { url: location.href, title: document.title, controls: out,
                openPanels: openedByUs.size };
+    },
+
+    // 整页的语义骨架：每个控件配一组"人能看懂的坐标"——在哪个板块、是这个板块的第几条
+    // 记录、字段标签是什么、同一标签在这条记录里的第几个。
+    //
+    // 为什么要第四维：站点常把"年/月"或"起/止"放在同一个标签底下，只给到标签定位不到
+    // 具体哪一个。为什么不用全局下标：加一组条目，后面所有下标都变，一百多个数字要重算，
+    // 而且写错一位就操作到无关控件。语义坐标加条目不失效，写错了也只是找不到。
+    //
+    // 板块按"控件前面最近的标题"认，条目组按 DOM 结构认（每条记录各有一个容器），
+    // 都不依赖任何站点的 class 命名。
+    outline() {
+      const Q = 'input:not([type=hidden]),textarea,select,[contenteditable="true"],'
+        + '[role="combobox"],[role="checkbox"],[role="switch"]';
+      const HEAD = 'h1,h2,h3,h4,h5,legend,[class*="title"],[class*="Title"],'
+        + '[class*="header"],[class*="Header"],[class*="block-name"]';
+      // 板块：往前（文档序）找最近的一个短标题。
+      const heads = [...document.querySelectorAll(HEAD)]
+        .filter(h => visible(h) && clean(h.innerText) && clean(h.innerText).length < 40);
+      const sectionOf = el => {
+        let best = '';
+        for (const h of heads) {
+          if (h.contains(el)) continue;
+          if (h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) best = clean(h.innerText);
+        }
+        return best;
+      };
+      const rows = [];
+      for (const el of document.querySelectorAll(Q)) {
+        if (!visible(el)) continue;
+        rows.push({ el, section: sectionOf(el), label: nameOf(el) });
+      }
+      // 条目序号按 DOM 结构认，不按"标签重复"认：两个控件共用一个 label 是常事
+      // （年/月、起/止），拿标签重复当换条目的信号，会把同一条记录劈成两条。
+      //
+      // 一条记录长什么样：同一层上有几个兄弟节点，各自装着一组**标签相同**的控件。
+      // 所以从控件往上走，走到某一层，它的兄弟里出现了和自己标签集合重合的那一组，
+      // 那一层就是记录容器；一直走到顶都没有，说明这个板块只有一条记录。
+      // 一条记录的容器要同时满足两件事：同层有若干个标签集合相同的兄弟（说明是重复结构），
+      // 而且自己装着**至少两个不同的标签**。第二条不能省：年/月两个框共用一个标签时，
+      // 它们各自也是"标签集合相同的兄弟"，只看第一条会把一条记录劈成两条。
+      const labelsIn = (node, peers) => peers.filter(r => node.contains(r.el)).map(r => r.label);
+      const recordNo = new Map();                // 控件 → 这是本板块第几条记录
+      const bySection = new Map();
+      for (const row of rows) {
+        if (!bySection.has(row.section)) bySection.set(row.section, []);
+        bySection.get(row.section).push(row);
+      }
+      for (const [, list] of bySection) {
+        let containers = [];
+        let node = list[0].el;
+        for (let d = 0; node && node.parentElement && d < 8; d++) {
+          const mine = labelsIn(node, list);
+          if (new Set(mine).size > 1) {
+            const key = mine.join('\u0000');
+            const same = [...node.parentElement.children].filter(c =>
+              list.some(r => c.contains(r.el)) && labelsIn(c, list).join('\u0000') === key);
+            if (same.length > 1) { containers = same; break; }
+          }
+          node = node.parentElement;
+        }
+        for (const row of list) {
+          const at = containers.findIndex(c => c.contains(row.el));
+          recordNo.set(row.el, at < 0 ? 1 : at + 1);
+        }
+      }
+      const counters = new Map();                // "板块 条目 标签" → 已出现几个
+      const out = [];
+      for (const row of rows) {
+        const sec = row.section;
+        const occurrence = recordNo.get(row.el) || 1;
+        // 同一条记录里同名标签的第几个（年/月、起/止）
+        const n = (counters.get(sec + ' ' + occurrence + ' ' + row.label) || 0) + 1;
+        counters.set(sec + ' ' + occurrence + ' ' + row.label, n);
+        const r = rectOf(row.el);
+        out.push({ handle: register(row.el), section: sec, occurrence,
+                   label: row.label, nth: n, tag: row.el.tagName.toLowerCase(),
+                   type: row.el.getAttribute('type') || '',
+                   disabled: !!row.el.disabled || row.el.getAttribute('aria-disabled') === 'true',
+                   readonly: !!row.el.readOnly || row.el.getAttribute('aria-readonly') === 'true',
+                   maxlength: row.el.getAttribute('maxlength'),
+                   sensitive: isSensitive(row.el),
+                   valueLen: typeof row.el.value === 'string' ? row.el.value.length : null,
+                   rect: r });
+      }
+      return { url: location.href, title: document.title, fields: out };
+    },
+
+    // 按语义坐标找控件。四维都给才唯一，缺的维度按"只有一个候选才算数"处理。
+    locate(section, occurrence, label, nth) {
+      const all = api.outline().fields;
+      const hit = all.filter(f =>
+        (section == null || f.section === section)
+        && (occurrence == null || f.occurrence === occurrence)
+        && (label == null || f.label === label)
+        && (nth == null || f.nth === nth));
+      if (!hit.length) {
+        const near = all.filter(f => label != null && f.label === label)
+          .map(f => ({ section: f.section, occurrence: f.occurrence, nth: f.nth })).slice(0, 8);
+        return { error: 'not-found', sameLabel: near };
+      }
+      if (hit.length > 1)
+        return { error: 'ambiguous', count: hit.length,
+                 candidates: hit.slice(0, 8).map(f => ({ section: f.section,
+                   occurrence: f.occurrence, label: f.label, nth: f.nth })) };
+      const f = hit[0], el = get(f.handle);
+      return { handle: f.handle, tag: f.tag, name: f.label, visible: !!el && visible(el),
+               disabled: f.disabled, readonly: f.readonly, sensitive: f.sensitive,
+               rect: f.rect, matched: 1 };
+    },
+
+    // 这个 handle 指向的控件是不是敏感字段，以及它现在的可访问名称。
+    // 执行前用它核对"模型以为自己在操作什么"和"实际会操作什么"是不是一回事。
+    identify(handle) {
+      const el = get(handle);
+      if (!el) return { error: 'gone' };
+      return { name: nameOf(el), sensitive: isSensitive(el) };
     },
 
     // 选择器只在这里解析，之后一律按 handle。找不到返回 null，不抛。

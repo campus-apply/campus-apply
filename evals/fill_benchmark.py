@@ -29,7 +29,9 @@ HERE = Path(__file__).resolve().parent
 BROWSER_DIR = HERE.parent / 'skills/campus-apply/scripts/browser'
 CDP = BROWSER_DIR / 'chrome_cdp.py'
 
-# One target state, used by both arms and by the oracle.
+# One target state, used by both arms and by the oracle. The two sensitive fields carry
+# sensitive_ok because a speed comparison is only valid if both arms write the same set —
+# and because the allow-path needs covering too; real plans leave them to the user.
 TARGET = dict(wish1='AI产品岗', dept=['技术线', '平台研发'], city='北京市', gender='男',
               name='瞿某某', email='wenkai@example.com', idcard='110101200001011234',
               birth='2001-02-14', statement='测' * 300, transfer=False)
@@ -55,9 +57,10 @@ PLAN = {
              selector='[data-dropdown="gender"] .fx-select-input', value=TARGET['gender'],
              display_selector='[data-display="gender"]'),
         dict(key='email', label='邮箱', kind='text', selector='#email', value=TARGET['email']),
-        dict(key='idcard', label='证件号码', kind='text', selector='#idcard', value=TARGET['idcard']),
+        dict(key='idcard', label='证件号码', kind='text', selector='#idcard',
+             value=TARGET['idcard'], sensitive_ok=True),
         dict(key='birth', label='出生日期', kind='date', selector='#birth', value=TARGET['birth'],
-             display_selector='[data-display="birth"]'),
+             display_selector='[data-display="birth"]', sensitive_ok=True),
         dict(key='statement', label='自我描述', kind='text', selector='#statement',
              value=TARGET['statement'], max=500),
     ],

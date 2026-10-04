@@ -15,10 +15,24 @@
   chrome_cdp.py --mark <运行ID> stage <stage.js> [--libs a.js b.js] [--max 秒]
         把库和 stage 拼成一个脚本注入。stage 写成 (async () => {...})()，用 window.__ca.L() 记日志，结束时 L('DONE')，
         出错 L('ERR ...')；每次运行发一个 ID，只有本次运行能写全局日志；本命令复用连接轮询日志到 DONE / ERR / 超时（默认总预算 90 秒）；失败退出非零。
+  chrome_cdp.py --mark <运行ID> survey <输出.json>
+        只读地把这一页摸清楚，一条命令抵十几次往返：确认渲染稳定（连探到控件数不变）、整页字段与语义坐标、
+        probe 的控件属性、五路找上传位（直接的 input[type=file] / shadow DOM 递归 / 带 accept 的元素 /
+        正文关键词 / iframe）。不点击、不写入、不开面板。摘要打到 stdout，明细写进输出文件。
+  chrome_cdp.py --mark <运行ID> plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]
+        从页面生成计划骨架：字段的语义坐标（板块 / 第几条 / 标签 / 同标签第几个）由代码从 DOM 读出来，
+        每个字段的 value 留成 null，模型只填值，不用自己维护一张下标表。disabled 的字段不列入，
+        敏感字段标注出来。--skip-ok 指向上一次的 fill 报告，标 filled 的字段这次不再列出（只补没填成的）。
   chrome_cdp.py --mark <运行ID> fill <计划.json> [--max 秒]
         按计划把一整页字段连续填完，一次调用一份报告：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现
         → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不用为每个字段写脚本。
         计划 JSON：{"fields": [{...}], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}
+        定位有两种写法，优先语义：**语义坐标** section / occurrence / label / nth（板块、第几条记录、
+        字段标签、同一条里同名标签的第几个——"年/月"或"起/止"共用标签时第四维不能省），由 plan-skeleton
+        生成；**selector + index** 仍然接受，用于骨架覆盖不到的场合。语义坐标加条目不失效、写错了只是
+        找不到，而 index 是纯位置量，错一位就操作到完全无关的控件。
+        可选 expect_label：声明这个控件的可访问名称应当含什么，执行前校验，对不上就不动它。
+        证件号、出生日期这类敏感字段一律跳过，除非该字段写了 sensitive_ok。
         每个 field：key / label（报告里显示）、selector（CSS）、index（同选择器第几个，默认 0）、
         kind 取 text|dropdown|search|cascader|date|checkbox|native-select、value（级联是数组，逐级点）、
         可选 term（可搜索下拉先打的词）、display_selector（值显示在别处时指明）、max（文本字数上限）、display（级联回读用的显示值）。
@@ -796,18 +810,60 @@ def _fill_one(tab, item, waits, learned=None):
     learned 是本页已经试出来的收面板办法，由调用方在字段之间传下去。
     """
     kind, selector = item.get('kind', 'text'), item.get('selector', '')
-    want, label = item.get('value'), item.get('label') or item.get('key') or selector
+    # label 是定位用的字段标签（要和页面上的一致）；报告里显示的名字另给 title，
+    # 没给就退回 label。两者混用会让"把显示名写顺口一点"变成定位失败。
+    want = item.get('value')
+    label = item.get('title') or item.get('label') or item.get('key') or selector
     record = dict(key=item.get('key') or label, kind=kind, label=label, status='failed')
     if kind not in FILL_KINDS:
         record['why'] = 'kind 不认识：' + str(kind)
         return False, record
-    info = _fill_call(tab, 'window.__caFill.resolve(%s, %d)'
-                      % (json.dumps(selector), int(item.get('index', 0) or 0)))
+    # 定位：给了语义坐标就按语义找，否则退回 selector + index。两条路都在报告里标明
+    # 走的哪条——位置量写错一位就会操作到完全无关的控件，出了事要能一眼看出是哪种寻址。
+    # 判据不能把 label 算进去：老计划普遍用 label 当显示名，拿它当语义寻址的信号会让
+    # 每一份老计划都走错路。给了 selector 就按 selector 走，语义寻址要 section/occurrence/nth。
+    via = 'selector'
+    if not selector and any(item.get(k) is not None
+                            for k in ('section', 'occurrence', 'nth', 'label')):
+        via = 'semantic'
+        info = _fill_call(tab, 'window.__caFill.locate(%s, %s, %s, %s)' % (
+            json.dumps(item.get('section')) if item.get('section') is not None else 'null',
+            int(item['occurrence']) if item.get('occurrence') is not None else 'null',
+            json.dumps(item.get('label')) if item.get('label') is not None else 'null',
+            int(item['nth']) if item.get('nth') is not None else 'null'))
+        if info and info.get('error') == 'ambiguous':
+            record['why'] = ('语义坐标不唯一，匹配到 %d 个：' % info.get('count', 0)
+                             + json.dumps(info.get('candidates'), ensure_ascii=False))
+            return False, record
+        if info and info.get('error') == 'not-found':
+            near = info.get('sameLabel') or []
+            record['why'] = ('按语义坐标找不到这个字段'
+                             + ('，同名标签出现在：' + json.dumps(near, ensure_ascii=False)
+                                if near else ''))
+            return False, record
+    else:
+        info = _fill_call(tab, 'window.__caFill.resolve(%s, %d)'
+                          % (json.dumps(selector), int(item.get('index', 0) or 0)))
+    record['via'] = via
     if not info or info.get('error'):
         record['why'] = {'not-found': '找不到控件', 'bad-selector': '选择器不合法'}.get(
             (info or {}).get('error'), str((info or {}).get('error')))
         return False, record
     handle = info['handle']
+    # 身份校验：声明权在模型，执行权在代码。模型说这个控件的名字应当含什么，
+    # 对不上就不动它——比事后发现写错了再回滚便宜得多。
+    ident = _fill_call(tab, f'window.__caFill.identify({handle})') or {}
+    expect = item.get('expect_label')
+    if expect and expect not in (ident.get('name') or ''):
+        record['why'] = (f'控件身份校验不通过：计划期望名称含「{expect}」，'
+                         f'实到「{ident.get("name")}」，没有动它')
+        return False, record
+    if ident.get('sensitive') and not item.get('sensitive_ok'):
+        # 算失败不算跳过：skipped 是"客观写不进"（账号级 disabled 字段），
+        # 这里是计划明确要求了而我们拒绝执行，调用方必须知道这个字段没写成。
+        record['why'] = (f'敏感字段（「{ident.get("name")}」）不写入；'
+                         f'确有必要请在计划里写 sensitive_ok 并由用户确认')
+        return False, record
     record['resolved'] = dict(tag=info['tag'], name=info.get('name'),
                               matched=info.get('matched'), visible=info.get('visible'))
     if info.get('disabled'):
@@ -1008,6 +1064,83 @@ def cmd_fill(plan_path, max_seconds=120):
         print(f'DONE {filled}/{len(items)} 个字段已填并回读一致，面板 0')
         return 0
 
+    return _with_claimed_tab(go, deadline)
+
+
+def cmd_plan_skeleton(out_path, skip_ok=None):
+    """从当前页面生成一份计划骨架：字段的语义坐标由代码从 DOM 读出来，模型只往 value 里填值。
+
+    为什么不让模型自己写坐标：整页一百多个字段时，模型要先抄一遍控件下标、写计划时再按
+    新下标重算一遍；给某个板块加一组条目，全局下标全变，一百多个数字要重新映射。这两笔
+    是实测里最大的两段浏览器空置时间，而它们产出的东西页面自己就知道。
+
+    skip_ok 指向上一次的 fill 报告，里面标 filled 的字段这次不再列出——只补没填成的那些，
+    不必为了几个失败字段把整页长文本重写一遍。
+    """
+    done = set()
+    if skip_ok:
+        try:
+            with open(skip_ok, encoding='utf-8') as f:
+                prior = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f'ERR_PLAN: 读不出上一次的报告：{e}')
+            return 2
+        for r in (prior.get('fields') or []):
+            if r.get('status') == 'filled':
+                done.add(r.get('key'))
+
+    def go(tab):
+        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
+            lib = f.read()
+        _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
+        if err:
+            print(f'ERR_JS: 注入填写库失败：{err}')
+            return 1
+        outline = _fill_call(tab, 'window.__caFill.outline()')
+        fields, skipped = [], 0
+        for f in outline['fields']:
+            key = ' / '.join(str(x) for x in
+                             (f['section'], f['occurrence'], f['label'], f['nth']) if x != '')
+            if key in done:
+                skipped += 1
+                continue
+            if f['disabled']:
+                continue                                    # 账号级字段写不进，不占计划位置
+            kind = 'checkbox' if f['type'] in ('checkbox', 'radio') else (
+                'native-select' if f['tag'] == 'select' else 'text')
+            item = dict(key=key, label=f['label'], section=f['section'],
+                        occurrence=f['occurrence'], nth=f['nth'],
+                        kind=kind, value=None)
+            if f['maxlength']:
+                item['max'] = int(f['maxlength'])
+            if f['sensitive']:
+                item['note'] = '敏感字段，默认不写；确需填写要加 sensitive_ok 并经用户确认'
+            fields.append(item)
+        plan = dict(source=outline['url'], fields=fields)
+        try:
+            with open(out_path, 'w', encoding='utf-8') as fh:
+                json.dump(plan, fh, ensure_ascii=False, indent=1)
+        except OSError as e:
+            print(f'ERR_WRITE {out_path}：{e}')
+            return 1
+        by_section = {}
+        for f in fields:
+            by_section[f['section']] = by_section.get(f['section'], 0) + 1
+        for section, n in by_section.items():
+            print(f'{section or "（无标题板块）"}\t{n} 个字段')
+        print('---')
+        print(f'SKELETON {len(fields)} 个字段待填'
+              + (f'，跳过上轮已成的 {skipped} 个' if skipped else '')
+              + f' → {out_path}')
+        print('每个字段的 value 现在是 null，填上值再交给 fill；kind 按实际控件改'
+              '（dropdown / search / cascader / date）')
+        return 0
+
+    return _with_claimed_tab(go)
+
+
+def _with_claimed_tab(go, deadline=None):
+    """找到认领的标签页、跑 go(tab)、收尾关连接。几个子命令共用这段。"""
     mark, match = os.environ.get('TAB_MARK', ''), os.environ.get('TAB_MATCH', '')
     if not (mark or match):
         print('ERR_NEED_TAB_MARK_OR_TAB_MATCH')
@@ -1026,6 +1159,89 @@ def cmd_fill(plan_path, max_seconds=120):
         return 1
     finally:
         tab.close()
+
+
+def cmd_survey(out_path):
+    """只读地把这一页摸清楚，一条命令抵十几次往返。
+
+    探测本身浏览器只动几秒，贵的是命令之间的往返和模型抄表：确认渲染稳定要探两次、
+    字段结构要抄一遍、上传位要分几路找、长文本的限制要分别读属性和页面明文。
+    这些都在页内一次做完，省掉的是空等。
+
+    只读：不点击、不写入、不开面板。会开面板的那部分在 probe-options。
+    """
+    def go(tab):
+        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
+            lib = f.read()
+        _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
+        if err:
+            print(f'ERR_JS: 注入填写库失败：{err}')
+            return 1
+        # 渲染稳定：表单常常分批出现，控件数不再变才算稳
+        counts = []
+        for _ in range(3):
+            counts.append(len(_fill_call(tab, 'window.__caFill.outline()')['fields']))
+            if len(counts) >= 2 and counts[-1] == counts[-2]:
+                break
+            time.sleep(1.2)
+        stable = len(counts) >= 2 and counts[-1] == counts[-2]
+        outline = _fill_call(tab, 'window.__caFill.outline()')
+        with open(os.path.join(HERE, 'probe.js'), encoding='utf-8') as f:
+            probe_src = f.read()
+        probe_raw, err = tab.evaluate(probe_src, await_promise=False)
+        probe = json.loads(probe_raw) if not err and probe_raw else None
+        # 上传位：五路一起找，省得一路一次往返
+        uploads = _fill_call(tab, '''(() => {
+          const direct = [...document.querySelectorAll('input[type=file]')];
+          const accept = [...document.querySelectorAll('[accept]')];
+          const hosts = [...document.querySelectorAll('*')].filter(e => e.shadowRoot);
+          const inShadow = [];
+          const dig = (root, depth) => {
+            if (depth > 6) return;
+            for (const el of root.querySelectorAll('input[type=file]')) inShadow.push(el);
+            for (const el of root.querySelectorAll('*')) if (el.shadowRoot) dig(el.shadowRoot, depth + 1);
+          };
+          hosts.forEach(h => dig(h.shadowRoot, 0));
+          const words = ['上传', '附件', '简历文件', '导入简历', '解析', '选择文件', '拖拽', 'upload'];
+          const text = document.body.innerText || '';
+          const frames = [...document.querySelectorAll('iframe')]
+            .map(f => ({ src: f.getAttribute('src'), visible: f.getClientRects().length > 0 }));
+          return { directFileInputs: direct.length, shadowFileInputs: inShadow.length,
+                   shadowHosts: hosts.length, acceptNodes: accept.length,
+                   vocabHits: words.filter(w => text.includes(w)), iframes: frames,
+                   textLength: text.length };
+        })()''')
+        report = dict(url=outline['url'], title=outline['title'],
+                      stable=stable, field_counts=counts,
+                      sections=sorted({f['section'] for f in outline['fields']}),
+                      fields=outline['fields'],
+                      probe=probe, upload=uploads)
+        try:
+            with open(out_path, 'w', encoding='utf-8') as fh:
+                json.dump(report, fh, ensure_ascii=False, indent=1)
+        except OSError as e:
+            print(f'ERR_WRITE {out_path}：{e}')
+            return 1
+        print(f'SURVEY {len(outline["fields"])} 个可见字段，'
+              f'{len(report["sections"])} 个板块，'
+              + ('渲染已稳定' if stable else f'渲染还在变（{counts}），建议过几秒再跑一次'))
+        has_upload = uploads['directFileInputs'] or uploads['shadowFileInputs']
+        print('上传位：' + (f'有 {uploads["directFileInputs"]} 个直接的、'
+                            f'{uploads["shadowFileInputs"]} 个在 shadow DOM 里'
+                            if has_upload else
+                            '本页没有。' + ('正文里出现过 ' + '、'.join(uploads['vocabHits'])
+                                            + '，可能在别的页面' if uploads['vocabHits']
+                                            else '正文里也没有上传相关的说法')))
+        sensitive = [f['label'] for f in outline['fields'] if f['sensitive']]
+        if sensitive:
+            print('敏感字段（默认不写）：' + '、'.join(dict.fromkeys(sensitive)))
+        unknown = [c['label'] for c in (probe or {}).get('controls', []) if c.get('valueUnknown')]
+        if unknown:
+            print('值读不出的字段（不许据此补填）：' + '、'.join(dict.fromkeys(unknown)))
+        print(f'明细 → {out_path}')
+        return 0
+
+    return _with_claimed_tab(go)
 
 
 def cmd_screenshot(out_path):
@@ -1384,6 +1600,8 @@ USAGE = {
     'click': 'click <选择器|js:表达式|x,y>（一个参数）',
     'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
     'fill': 'fill <计划.json> [--max 秒]',
+    'survey': 'survey <输出.json>',
+    'plan-skeleton': 'plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]',
     'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
     'sniff': 'sniff <选择器|js:表达式|x,y>（一个参数）[--wait 秒]',
     'type': 'type <选择器|js:表达式> <文本|@文件>',
@@ -1470,6 +1688,21 @@ def main(argv):
             rest.append(args[i]); i += 1
         if len(rest) == 1:
             return cmd_fill(rest[0], max_s)
+    if cmd == 'survey' and len(args) == 1:
+        return cmd_survey(args[0])
+    if cmd == 'plan-skeleton' and args:
+        skip_ok, rest = None, []
+        i = 0
+        while i < len(args):
+            if args[i] == '--skip-ok':
+                if i + 1 >= len(args):
+                    print('ERR_USAGE plan-skeleton: --skip-ok 缺少文件名')
+                    return 2
+                skip_ok = args[i + 1]; i += 2
+                continue
+            rest.append(args[i]); i += 1
+        if len(rest) == 1:
+            return cmd_plan_skeleton(rest[0], skip_ok)
     if cmd == 'read-urls' and 2 <= len(args) <= 4:
         return cmd_read_urls(*args)
     if cmd == 'launch' and len(args) <= 1:

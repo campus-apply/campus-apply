@@ -60,9 +60,18 @@ CASES = [
      [dict(key='x', label='怪控件', kind='telepathy', selector='#name', value='甲')],
      1, 'kind 不认识'),
     ('回读对不上就算没填成',
-     # 写 #birth：它是 readonly，写不进去
-     [dict(key='birth', label='出生日期', kind='text', selector='#birth', value='2001-02-14')],
+     # 写一个只读的下拉输入框：写不进去，回读也对不上
+     [dict(key='wish1', label='第一志愿', kind='text',
+           selector='[data-dropdown="wish1"] .fx-select-input', value='产品岗')],
      1, 'readonly'),
+    ('敏感字段默认不写，哪怕计划里给了值',
+     # 位置寻址写错一位就会操作到无关控件，而最敏感的字段往往排在最前面
+     [dict(key='birth', label='出生日期', kind='text', selector='#birth', value='2001-02-14')],
+     1, '敏感字段'),
+    ('声明了期望的控件名称，对不上就不动它',
+     [dict(key='name', label='姓名', kind='text', selector='#name', value='甲',
+           expect_label='邮箱')],
+     1, '身份校验不通过'),
 ]
 
 
