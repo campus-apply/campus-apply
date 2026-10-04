@@ -46,9 +46,15 @@
     return clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder')) || '');
   };
 
-  // 面板候选：下拉、级联、日期面板多半挂在 body 下，class 带发版哈希，所以按角色和常见词兜一层，
-  // 再用几何位置和"点击后才出现"两个条件筛，避免把页面本来就有的列表当面板。
-  const PANEL_SEL = '[role="listbox"],[role="menu"],[role="dialog"],[role="tree"],'
+  // 面板怎么找：**按点击前后谁新出现了**，不按 class 清单猜。
+  //
+  // 按 class 全局列举再几何配对，两头都会失手：有的站真面板的祖先也命中同一个选择器，
+  // "只留最外层"会把真面板吞掉；有的站面板盖在输入框上，"必须紧贴若干像素内"会把它扔掉。
+  // 而行内常驻的下拉容器天天命中选择器，于是整页填完也数出一堆"开着的面板"。
+  //
+  // 点击前装观察器、点击后收新增节点，站点无关：面板是点出来的，它一定是新的。
+  // 下面这个选择器只用来在多个候选里排序（更像面板的排前面），**不淘汰任何东西**。
+  const PANEL_HINT = '[role="listbox"],[role="menu"],[role="dialog"],[role="tree"],'
     + '[class*="dropdown"],[class*="Dropdown"],[class*="select-panel"],[class*="picker"],'
     + '[class*="Picker"],[class*="cascader"],[class*="Cascader"],[class*="calendar"],'
     + '[class*="Calendar"],[class*="menus"],[class*="popper"],[class*="popover"],[class*="panel"]';
@@ -71,6 +77,50 @@
     return el && el.isConnected ? el : null;
   };
 
+  // 点击前后的变化观察。面板有两种出法：新插一个节点（挂 body 或 portal 下），
+  // 或者本来就在 DOM 里、靠改样式显形。两种都要认，所以既看新增节点也看属性变化。
+  let watcher = null, appeared = new Set();
+  const watchStart = () => {
+    watchStop();
+    appeared = new Set();
+    watcher = new MutationObserver(records => {
+      for (const rec of records) {
+        for (const node of rec.addedNodes)
+          if (node.nodeType === 1) appeared.add(node);
+        // 本来就在 DOM 里、改 class 或 style 显形的（常见于把 display:none 去掉）
+        if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+      }
+    });
+    watcher.observe(document.documentElement, {
+      childList: true, subtree: true,
+      attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+    });
+  };
+  const watchStop = () => {
+    if (watcher) { watcher.takeRecords(); watcher.disconnect(); watcher = null; }
+  };
+  // 取走这一轮新出现、且现在可见、够大的节点。同一棵树里只留最外层那个——这里按
+  // "谁是谁的祖先"去重是安全的，因为两个都是这一轮新出现的，不会误伤常驻容器。
+  const watchTake = () => {
+    if (watcher) watcher.takeRecords().forEach(rec => {
+      for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
+      if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+    });
+    const fresh = [...appeared].filter(el => el.isConnected && visible(el));
+    const out = [];
+    for (const el of fresh) {
+      if (fresh.some(other => other !== el && other.contains(el))) continue;
+      const r = rectOf(el);
+      if (r.w < 20 || r.h < 10) continue;
+      out.push(el);
+    }
+    return out;
+  };
+
+  // 自己点开过、还没收掉的面板。整页收尾只看这一本账，不看"页面上有多少节点像面板"——
+  // 行内常驻容器永远像面板，拿它当失败判据会让某些站永远填不完。
+  const openedByUs = new Map();       // handle → 面板元素
+
   const api = {
     // 整页控件表：一次调用读完，别一个字段一次往返。
     snapshot() {
@@ -90,7 +140,7 @@
                    rect: r });
       }
       return { url: location.href, title: document.title, controls: out,
-               panels: api.panels().length };
+               openPanels: openedByUs.size };
     },
 
     // 选择器只在这里解析，之后一律按 handle。找不到返回 null，不抛。
@@ -147,16 +197,51 @@
       return { error: 'no-label' };
     },
 
-    // 当前可见的面板。几何信息一并带回来，调用方按"和输入框横向重叠、纵向紧挨"配对。
-    panels() {
-      const out = [];
-      for (const el of document.querySelectorAll(PANEL_SEL)) {
-        if (!visible(el)) continue;
-        if (out.some(p => get(p.handle) && get(p.handle).contains(el))) continue;  // 只留最外层
+    // 开始盯着页面的变化。点开面板之前调一次。
+    watchStart() { watchStart(); return true; },
+
+    // 取这一轮点击之后新出现的候选，按"更像面板"排序后返回。排序只影响先试哪个，
+    // 不会把任何候选排除掉——某个站的面板既不在输入框上方也不在下方，而是盖在它身上。
+    appeared(anchorHandle) {
+      const anchor = anchorHandle ? get(anchorHandle) : null;
+      const box = anchor ? rectOf(anchor) : null;
+      const scored = watchTake().map(el => {
         const r = rectOf(el);
-        if (r.w < 20 || r.h < 10) continue;
-        out.push({ handle: register(el), cls: clean(el.className).slice(0, 80), rect: r });
+        let score = 0;
+        if (el.matches(PANEL_HINT)) score += 4;                  // 像面板的词
+        if (el.querySelector(OPTION_SEL)) score += 3;            // 里面有能点的选项
+        const pos = getComputedStyle(el).position;
+        if (pos === 'fixed' || pos === 'absolute') score += 2;   // 浮层多半脱离文档流
+        if (box) {
+          const overlapX = Math.min(r.x + r.w, box.x + box.w) - Math.max(r.x, box.x);
+          if (overlapX > 0) score += 2;                          // 和输入框横向有重叠
+          const gap = Math.min(Math.abs(r.y - (box.y + box.h)), Math.abs(box.y - (r.y + r.h)));
+          score += Math.max(0, 3 - gap / 40);                    // 离得越近越像，但远也不淘汰
+        }
+        return { el, score, rect: r };
+      }).sort((a, b) => b.score - a.score);
+      return scored.map(s => ({ handle: register(s.el), rect: s.rect,
+                               score: Math.round(s.score * 100) / 100,
+                               cls: clean(s.el.className).slice(0, 80) }));
+    },
+
+    // 记下"这个字段开出来的面板是它"，以及收掉之后销账。
+    noteOpen(fieldHandle, panelHandle) {
+      const panel = get(panelHandle);
+      if (panel) openedByUs.set(fieldHandle, panel);
+      return true;
+    },
+    noteClosed(fieldHandle) { openedByUs.delete(fieldHandle); return true; },
+
+    // 自己开过、现在仍然可见的面板。这是整页收尾唯一该看的数。
+    stillOpen() {
+      const out = [];
+      for (const [fieldHandle, panel] of openedByUs) {
+        if (!panel.isConnected || !visible(panel)) { openedByUs.delete(fieldHandle); continue; }
+        out.push({ field: fieldHandle, handle: register(panel),
+                   cls: clean(panel.className).slice(0, 80) });
       }
+      watchStop();
       return out;
     },
 
@@ -243,13 +328,34 @@
         if (shown) display = clean(shown.tagName === 'INPUT' ? shown.value : shown.innerText);
       }
       if (display === null) {
-        // 没给显示值选择器时，在字段容器里找显示值元素（纯下拉的 input.value 常常是空的）
-        let wrap = el.parentElement;
-        for (let d = 0; wrap && wrap !== document.body && d < 3; d++) {
-          const shown = wrap.querySelector('[class*="display-value"],[class*="selected-value"],'
-            + '[class*="selection-item"],[class*="selected-item"]');
-          if (shown && visible(shown)) { display = clean(shown.innerText); break; }
-          wrap = wrap.parentElement;
+        // 没给显示值选择器时，在字段容器里找显示值元素（纯下拉的 input.value 常常是空的）。
+        //
+        // 往上找要当心：站点常把"年/月/起/止"几个控件放进同一个字段容器，一路上溯再取
+        // 第一个显示值元素，会把隔壁控件的值当成自己的——"月"读成"年"，一整页假不一致。
+        // 所以先定界到这个控件自己的最小容器，上溯时还要校验找到的显示值和本控件同一行。
+        const DISP = '[class*="display-value"],[class*="selected-value"],'
+          + '[class*="selection-item"],[class*="selected-item"]';
+        const mine = rectOf(el);
+        const sameRow = node => {
+          const r = rectOf(node);
+          const overlap = Math.min(r.y + r.h, mine.y + mine.h) - Math.max(r.y, mine.y);
+          return overlap > Math.min(r.h, mine.h) * 0.5;   // 纵向重叠过半才算同一行
+        };
+        // 先在控件自己的最小容器里找：往上走，一旦祖先里出现第二个输入控件就停。
+        let ownBox = el;
+        for (let node = el.parentElement, d = 0;
+             node && node !== document.body && d < 4
+             && node.querySelectorAll('input:not([type=hidden]),textarea,select').length <= 1;
+             node = node.parentElement, d++) ownBox = node;
+        const own = [...ownBox.querySelectorAll(DISP)].find(visible);
+        if (own) display = clean(own.innerText);
+        if (display === null) {
+          let wrap = ownBox.parentElement;
+          for (let d = 0; wrap && wrap !== document.body && d < 3; d++) {
+            const shown = [...wrap.querySelectorAll(DISP)].find(n => visible(n) && sameRow(n));
+            if (shown) { display = clean(shown.innerText); break; }
+            wrap = wrap.parentElement;
+          }
         }
       }
       return { dom, display, model: api.modelValue(handle) };

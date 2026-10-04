@@ -684,49 +684,57 @@ def _wait_for(tab, expr, want, budget):
 
 
 def _panel_for(tab, handle, budget):
-    """找属于这个输入框的面板：横向有重叠、纵向紧挨（面板在下方或上方）。等到出现为止。
-    输入框的位置每次重新读——滚动会改变视口坐标，用解析时存下的旧位置会配不上。"""
-    def pick(state):
-        anchor = (state or {}).get('anchor')
-        if not anchor:
-            return None
-        best = None
-        for p in (state.get('panels') or []):
-            r = p['rect']
-            if r['x'] > anchor['x'] + anchor['w'] or r['x'] + r['w'] < anchor['x']:
-                continue                                    # 横向完全不重叠
-            gap = min(abs(r['y'] - (anchor['y'] + anchor['h'])), abs(anchor['y'] - (r['y'] + r['h'])))
-            if gap > 24:
-                continue                                    # 纵向离太远，不是这个字段的
-            if best is None or gap < best[0]:
-                best = (gap, p)
-        return best[1] if best else None
+    """找这次点击开出来的面板：取点击之后新出现的节点，按"更像面板"排序取第一个。
 
-    expr = ('(() => { const a = window.__caFill.aim(%d); '
-            'return {anchor: a.rect || null, panels: window.__caFill.panels()}; })()' % handle)
-    ok, state = _wait_for(tab, expr, lambda v: pick(v) is not None, budget)
-    return pick(state) if ok else None
+    不按 class 全局列举，也不用几何淘汰。两个真实站点给过两种相反的死法：一个站的真面板
+    被同样命中选择器的祖先容器吞掉，另一个站的面板盖在输入框上、被"必须紧贴若干像素"的
+    配对规则扔掉。面板是点出来的，所以"这一轮新出现"才是它的本质特征，几何只用于排序。
+    """
+    expr = 'window.__caFill.appeared(%d)' % handle
+    ok, found = _wait_for(tab, expr, lambda v: bool(v), budget)
+    if not ok or not found:
+        return None
+    panel = found[0]
+    _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
+    return panel
 
 
-def _close_panels(tab, handle, budget):
-    """按 on-site-principles 的顺序收面板，第一个奏效就停；返回用的哪一招和是否收干净。
-    禁止 document.body.click()，禁止键盘事件。"""
-    def still_open():
-        return _panel_for(tab, handle, 0.12) is not None
+def _panel_still_open(tab, handle):
+    """这个字段的面板还开着吗。只问我们记过账的那一个，不扫全页。"""
+    open_now = _fill_call(tab, 'window.__caFill.stillOpen()') or []
+    return any(p.get('field') == handle for p in open_now)
 
-    if not still_open():
+
+# 收面板的几招。顺序不写死：哪一招在本页奏效就记下来，后面的字段先试它。
+# 两个真实站点的结论正好相反——一个站"再点一次输入框"十次全中、"点字段标题"十次全不中，
+# 另一个站反过来。所以这是要现场试出来的，不是可以定在代码里的偏好。
+CLOSE_TRICKS = ('click-input-again', 'click-field-label', 'soft-click-label')
+
+
+def _close_panels(tab, handle, budget, learned=None):
+    """收面板，第一个奏效就停。返回 (用的哪一招, 是否收干净)。
+
+    learned 是本页已经试出来的那一招，有就先试它。禁止 document.body.click()，禁止键盘事件。
+    """
+    if not _panel_still_open(tab, handle):
+        _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
         return 'already-closed', True
-    attempts = [
-        ('click-input-again', lambda: _real_click(tab, handle)),
-        ('click-field-label', lambda: _click_own_label(tab, handle)),
-        ('soft-click-label', lambda: _soft_click_label(tab, handle)),
-    ]
-    for name, action in attempts:
+    actions = {
+        'click-input-again': lambda: _real_click(tab, handle),
+        'click-field-label': lambda: _click_own_label(tab, handle),
+        'soft-click-label': lambda: _soft_click_label(tab, handle),
+    }
+    order = list(CLOSE_TRICKS)
+    if learned in actions:                                  # 本页已知有效的先试
+        order.remove(learned)
+        order.insert(0, learned)
+    for name in order:
         try:
-            action()
+            actions[name]()
         except TabError:
             continue
-        if not still_open():
+        if not _panel_still_open(tab, handle):
+            _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
             return name, True
     return 'none', False
 
@@ -782,8 +790,11 @@ def _verify(tab, handle, want, display_selector, kind):
                 display=display, errors=errors)
 
 
-def _fill_one(tab, item, waits):
-    """按一个字段的计划动作到位。返回 (是否成功, 记录字典)。不抛到外面。"""
+def _fill_one(tab, item, waits, learned=None):
+    """按一个字段的计划动作到位。返回 (是否成功, 记录字典)。不抛到外面。
+
+    learned 是本页已经试出来的收面板办法，由调用方在字段之间传下去。
+    """
     kind, selector = item.get('kind', 'text'), item.get('selector', '')
     want, label = item.get('value'), item.get('label') or item.get('key') or selector
     record = dict(key=item.get('key') or label, kind=kind, label=label, status='failed')
@@ -837,8 +848,9 @@ def _fill_one(tab, item, waits):
             record['changed'] = got.get('changed')
 
         else:
-            # 面板类：开面板 → 等出现 → 选 → 收面板 → 验证归零
+            # 面板类：装观察器 → 开面板 → 收新出现的节点 → 选 → 收面板 → 销账
             steps = want if kind == 'cascader' and isinstance(want, list) else [want]
+            _fill_call(tab, 'window.__caFill.watchStart()')   # 必须在点击之前
             if kind == 'search':
                 _real_click(tab, handle)
                 term = item.get('term') or (steps[0] if isinstance(steps[0], str) else '')
@@ -862,12 +874,14 @@ def _fill_one(tab, item, waits):
                     available = (got or {}).get('available', [])
                     record['why'] = (f'第 {depth + 1} 级没有「{step}」'
                                      + ('，面板里有：' + '、'.join(available[:12]) if available else ''))
-                    _close_panels(tab, handle, waits['panel'])
+                    _close_panels(tab, handle, waits['panel'], learned)
                     return False, record
                 _real_click(tab, got['handle'])
+                # 级联的下一级可能新开一个面板，也可能就在当前面板里追加一列。
+                # 取不到新节点不是失败，继续用当前这个。
                 if depth + 1 < len(steps):
                     panel = _panel_for(tab, handle, waits['panel']) or panel
-            how, closed = _close_panels(tab, handle, waits['panel'])
+            how, closed = _close_panels(tab, handle, waits['panel'], learned)
             record['closed_by'] = how
             if not closed:
                 record['why'] = '选完了但面板收不起来'
@@ -945,29 +959,34 @@ def cmd_fill(plan_path, max_seconds=120):
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')
             return 1
-        records, filled = [], 0
+        records, filled, learned = [], 0, None
         for item in items:
             if time.monotonic() >= deadline:
                 records.append(dict(key=item.get('key') or item.get('selector'), status='not-started',
                                     why=f'到了 {max_seconds:g} 秒预算，这个字段没开始'))
                 continue
             try:
-                ok, record = _fill_one(tab, item, waits)
+                ok, record = _fill_one(tab, item, waits, learned)
             except TabError as e:
                 ok, record = False, dict(key=item.get('key') or item.get('selector'),
                                          status='failed', why=f'ERR_CDP: {e}')
+            # 哪一招收得掉面板是一页一个样，试出来就记住，后面的字段先用它
+            if record.get('closed_by') in CLOSE_TRICKS:
+                learned = record['closed_by']
             records.append(record)
             filled += 1 if ok else 0
             time.sleep(random.uniform(lo, hi))              # 字段间留间隔，节奏照 skill 的两档规矩
         # 收尾的只读检查不能把账本烧掉：页面在填写期间导航过的话 window.__caFill 随旧文档消失，
         # 这一行会抛异常。先把逐字段报告打出去，再报告上下文丢了。
-        lost = None
+        lost, still = None, []
         try:
-            left = _fill_call(tab, 'window.__caFill.panels().length')
+            still = _fill_call(tab, 'window.__caFill.stillOpen()') or []
         except TabError as e:
-            left, lost = None, str(e)
+            lost = str(e)
+        left = None if lost else len(still)
         report = dict(plan=os.path.basename(plan_path), total=len(items), filled=filled,
-                      open_panels=left, context_lost=lost,
+                      open_panels=left, open_panel_fields=[p.get('field') for p in still],
+                      close_trick=learned, context_lost=lost,
                       elapsed_seconds=round(time.monotonic() - started, 3), fields=records)
         for r in records:
             mark = {'filled': 'OK  ', 'skipped': 'SKIP', 'not-started': '----'}.get(r['status'], 'FAIL')
@@ -981,7 +1000,7 @@ def cmd_fill(plan_path, max_seconds=120):
             print('上面逐字段的结果是页面变化之前的，先只读核对当前页面再决定补填哪些')
             return 1
         if left:
-            print(f'ERR_PANELS 还有 {left} 个面板开着')
+            print(f'ERR_PANELS 我们开的面板还有 {left} 个没收掉')
             return 1
         if bad:
             print(f'ERR_FILL {len(bad)}/{len(items)} 个字段没填成')
