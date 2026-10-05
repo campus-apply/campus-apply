@@ -6,7 +6,12 @@
 //   2. 可见性不用 offsetParent：它对 position:fixed 的元素恒为假（真实站点的遮罩和下拉面板基本都是
 //      fixed 或挂在 body 下的绝对定位），改用 checkVisibility，退路是 getClientRects().length。
 (() => {
-  if (window.__caFill) return;
+  // 同一版重复注入直接返回（一次运行里多条命令都会注入，重建会把 handle 账本清空）；
+  // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
+  // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
+  // 版本号跟着这个文件的语义走，改了判据就加一。
+  const VERSION = 2;
+  if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
   let next = 1;
@@ -20,7 +25,13 @@
     return style.display !== 'none' && style.visibility !== 'hidden'
       && el.getClientRects().length > 0;
   };
-  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  // 任何类型都接：SVG 元素的 className 是 SVGAnimatedString 而不是字符串，
+  // 对它调 .replace 会抛 TypeError。页面上到处是 SVG 图标，任何按结构（而不是按
+  // 标签名名单）遍历节点的代码都会碰到它们。
+  const clean = s => (s === null || s === undefined ? ''
+    : typeof s === 'string' ? s
+    : typeof s.baseVal === 'string' ? s.baseVal       // SVGAnimatedString
+    : String(s)).replace(/\s+/g, ' ').trim();
 
   // 可访问名称：aria-labelledby → aria-label → 关联 label → 子文本 → title → placeholder，递归防环。
   // 比按框架 class 猜标签稳，同一套算法也给 probe 用。
@@ -710,5 +721,6 @@
     },
   };
 
+  api.version = VERSION;            // 注入守卫按它判断要不要重建（见文件开头）
   window.__caFill = api;
 })();
