@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 6;
+  const VERSION = 9;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -337,12 +337,37 @@
     // 新插的节点和改过属性的节点都算候选，这里**不筛**。曾经按"点击前不可见、现在可见"
     // 筛过一道，那条规则会杀掉"面板本来就可见、点击后才填进选项"的站。
     const fresh = [...appeared].filter(el => el.isConnected && visible(el));
+    // 这一轮动过的节点里，哪些够大到像个面板。
+    //
+    // 尺寸**不能只看节点自己的盒子**：真站上见过挂 body 下的 portal 容器自身高度是 0
+    // （1200×0），面板是它里面那个 absolute 定位的子节点（286×264）。按自身盒子筛，
+    // 这个 0 高容器被扔掉，里面真正的面板也跟着没了机会——**面板明明开着，却报没出现**。
+    // 占不占地方要问这棵子树，这是几何事实，和站点怎么命名无关。
     const out = [];
     for (const el of fresh) {
-      if (fresh.some(other => other !== el && other.contains(el))) continue;
       const r = rectOf(el);
-      if (r.w < 20 || r.h < 10) continue;
-      out.push(el);
+      // 自己就有尺寸的：照旧只留最外层（同一棵树里外层代表这个面板）
+      if (r.w >= 20 && r.h >= 10) {
+        if (fresh.some(other => other !== el && other.contains(el)
+                                && (() => { const o = rectOf(other);
+                                            return o.w >= 20 && o.h >= 10; })())) continue;
+        out.push(el);
+        continue;
+      }
+      // 自己没尺寸的壳：**把里面有尺寸的那一层捞出来**，不要整个丢掉。
+      // 真站上见过挂 body 下的 portal 容器自身 1200×0，面板是它里面那个
+      // absolute 定位的 286×264 子节点。按自身盒子筛会把这一支整个扔掉——
+      // 面板明明开着，却报"没出现候选"，而且连证据都没有。
+      for (const kid of el.querySelectorAll('*')) {
+        if (!visible(kid)) continue;
+        const kr = kid.getBoundingClientRect();
+        if (kr.width < 20 || kr.height < 10) continue;
+        // 同一个壳会被 MutationObserver 记两次（新增节点 + 属性变化），两次都下沉到
+        // 同一层就会把一个面板登记成两条一样的候选，分数相同 → 报"认不准"，
+        // 而其实只有一个面板。按元素去重，不按记录条数。
+        if (!out.includes(kid)) out.push(kid);
+        break;                                     // 每个壳只取最外面那一层
+      }
     }
     return out;
   };

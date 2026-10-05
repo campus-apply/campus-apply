@@ -154,6 +154,25 @@ def main():
             fails += 0 if assert_ge('degree optionCount under --only',
                                     deg_o[0].get('count') or deg_o[0].get('optionCount') or 0, 1) else 1
 
+        # ── shape 4: portal panel in a zero-height shell ──────────────────────
+        # 真站实测的形状：面板挂 body 下一个自身 1200×0 的壳里，真面板是壳里面那个
+        # absolute 定位的子节点（286×264）。按"节点自己的盒子够不够大"筛候选会把
+        # 这个 0 高壳扔掉，面板跟着消失——面板明明开着却报"没出现候选"。
+        # 另一个坑：同一个壳被 MutationObserver 记两次（新增 + 属性变化），
+        # 两次都下沉到同一层会把一个面板登记成两条一样的候选 → 报"认不准"。
+        print('\n=== D: portal panel (zero-height shell under body) ===')
+        r = cdp(mark, 'open', base + '?shape=4', mark + '-p')
+        tf_portal = tempfile.mktemp(suffix='.json')
+        r = cdp(mark + '-p', 'probe-options', tf_portal, '--only', '目标城市')
+        portal = json.load(open(tf_portal))
+        city = [f for f in portal.get('fields', []) if f.get('label') == '目标城市']
+        fails += 0 if assert_true('portal dropdown explored', city) else 1
+        if city:
+            got = city[0].get('count') or city[0].get('optionCount') or 0
+            fails += 0 if assert_eq('portal optionCount', got, 7) else 1
+            fails += 0 if assert_eq('portal kind not unsure (一个面板不该登记成两条)',
+                                    city[0].get('kind') != 'unsure', True) else 1
+
         # ── audit: nav and file-picker must not have been triggered ───────────
         print('\n=== C: audit — nav and file-picker untouched ===')
         audit_js = 'JSON.stringify(window.fixtureAudit())'

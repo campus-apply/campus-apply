@@ -18,13 +18,20 @@
              实测后果：自动探测把整页探测带到了另一个页面。
   形状 3 —— 上传按钮：一个普通 div 壳包着隐藏的 input[type=file]，点壳会弹
              系统文件选择器。排除 input[type=file] 本身挡不住它——点的是壳。
+  形状 4 —— portal 面板：面板不插在控件里，而是挂到 body 下一个**自身高度为 0**
+             的 portal 容器里（实测 1200×0），真面板是它里面那个 absolute 定位的
+             子节点（286×264）。按"节点自己的盒子够不够大"筛候选时，这个 0 高容器
+             被扔掉，里面的面板也跟着没了机会——**面板明明开着，却报没出现候选**。
+             选项是 div 且自身就是叶子（文字直接挂在它身上），不带任何 role。
+             另一个坑：同一个壳会被 MutationObserver 记两次（新增节点 + 属性变化），
+             两次都下沉到同一层就会把一个面板登记成两条一样的候选 → 报"认不准"。
 
   **判据不是本页要测的东西，分工才是**：形状 1 必须能被看见（少收=悄悄瞎掉），
   形状 2 和 3 必须不被自动点击（点击不可逆）。两件事不能靠同一个开关解决，
   这正是"原生控件自己走、非原生交给 agent"的由来。
 
   查询参数：
-    ?shape=1|2|3|all   只渲染哪一组，不给就全渲染
+    ?shape=1|2|3|4|all 只渲染哪一组，不给就全渲染
     ?nav=router|href   形状 2 的导航用 JS 路由（默认，更难拦）还是 <a href>
 
   给测试用的接口（都是只读的，页面自己不调）：
@@ -73,6 +80,15 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
 /* 普通原生输入框，做对照：它在任何版本的选择器下都看得见 */
 .ci-text{box-sizing:border-box;font:inherit;height:36px;width:280px;padding:6px 10px;
   border:1px solid #d9d9d9;border-radius:4px}
+
+/* ── 形状 4：portal 面板。壳挂 body 下、自身高度 0，面板是里面那个 absolute 子节点 ── */
+.ci-popup{position:static;width:100%;height:0}        /* 实测 1200×0 —— 关键就在这个 0 */
+.ci-popper-wrap{position:absolute;z-index:70;box-sizing:border-box;width:286px;
+  background:#fff;border:1px solid #d9d9d9;border-radius:4px;
+  box-shadow:0 4px 14px rgba(0,0,0,.12);max-height:264px;overflow:auto;padding:4px 0}
+/* 选项自身就是叶子：文字直接挂在它身上，没有子元素、没有 role */
+.ci-menu-item{display:block;padding:8px 12px;cursor:pointer;min-height:20px;color:#222}
+.ci-menu-item:hover{background:#f0f6ff}
 </style>
 
 <div class="ci-head" id="ci-head">
@@ -126,6 +142,27 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
     <div class="ci-label">姓名</div>
     <input type="text" class="ci-text" id="ci-name" data-ci-text="name" placeholder="请输入真实姓名">
     <p class="ci-note">原生对照组：任何版本都看得见它，标签应读成"姓名"而不是占位符。</p>
+  </div>
+</section>
+
+<section class="ci-group" data-group="4">
+  <h2>形状 4：portal 面板（壳自身高度 0，挂 body 下）</h2>
+  <!-- 点控件后，面板不插在控件里，而是挂到 body 下的 .ci-popup 壳里。
+       壳自身 1200×0（实测值），真面板是里面那个 absolute 定位的 .ci-popper-wrap。
+       按"节点自己的盒子够不够大"筛候选会把这个 0 高壳扔掉，面板跟着消失。 -->
+  <div class="ci-field" data-shape="4">
+    <div class="ci-label">目标城市</div>
+    <div class="brick-field-control" data-ci-portal="city">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">面板挂 body 下的 0 高壳里；选项自身就是叶子，不带 role。</p>
   </div>
 </section>
 
@@ -216,6 +253,42 @@ document.querySelectorAll('[data-ci-select]').forEach(control => {
       panel.remove();
     }));
     control.appendChild(panel);                        // 面板插在控件内部，不挂 body
+  });
+});
+
+// ---- 形状 4：portal 面板 ----
+// 面板挂到 body 下一个**自身高度 0** 的壳里，真面板是壳里面那个 absolute 子节点。
+// 这是真站实测的结构：壳 1200×0、面板 286×264。按节点自身盒子筛候选会把壳扔掉，
+// 面板跟着消失 —— 面板明明开着却报"没出现候选"，而且连证据都拿不到。
+const CITIES = ['北京', '上海', '深圳', '广州', '杭州', '成都', '武汉'];
+truth.city = '';
+audit.portalOpened = 0;
+document.querySelectorAll('[data-ci-portal]').forEach(control => {
+  const key = control.dataset.ciPortal;
+  control.querySelector('.brick-select').addEventListener('click', () => {
+    const existing = document.querySelector('.ci-popup');
+    if (existing) { existing.remove(); return; }       // 再点一次收起
+    audit.portalOpened++;
+    const box = control.getBoundingClientRect();
+    // 壳：挂 body 下，自身高度 0（这正是坑所在）
+    const popup = document.createElement('div');
+    popup.className = 'ci-popup';
+    // 面板：壳里面那个有尺寸的 absolute 节点
+    const wrap = document.createElement('div');
+    wrap.className = 'ci-popper-wrap';
+    wrap.style.left = (box.left + scrollX) + 'px';
+    wrap.style.top  = (box.bottom + scrollY + 2) + 'px';
+    wrap.innerHTML = CITIES.map(c => '<div class="ci-menu-item">' + c + '</div>').join('');
+    wrap.querySelectorAll('.ci-menu-item').forEach(item =>
+      item.addEventListener('click', e => {
+        e.stopPropagation();
+        truth[key] = item.textContent;
+        control.querySelector('.brick-select-selection-selected-wrap').innerHTML =
+          '<div class="brick-select-selection-value">' + item.textContent + '</div>';
+        popup.remove();
+      }));
+    popup.appendChild(wrap);
+    document.body.appendChild(popup);
   });
 });
 
