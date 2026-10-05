@@ -722,6 +722,24 @@ def cmd_upload(selector, path):
 FILL_KINDS = ('text', 'dropdown', 'search', 'cascader', 'date', 'checkbox', 'native-select')
 
 
+def as_limit(value):
+    """把"可能是数字"的东西读成一个正整数上限；读不出就返回 None（当作没有上限）。
+
+    页面上的数字属性是字符串，不保证是数字：真实表单里见过 `maxlength="Infinity"`，浏览器
+    按"没有上限"对待，而 `int("Infinity")` 会抛异常。计划里的 `max` 同理——那是模型写的。
+    这里统一兜住：取不出有限正整数就当没给，绝不让整条命令因为一个属性值退出。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return int(number)
+
+
 def _fill_call(tab, expr):
     """调一次 __caFill 的方法，返回解析好的结果；页内抛异常算 TabError。"""
     v, err = tab.evaluate('JSON.stringify(' + expr + ')', await_promise=False)
@@ -954,8 +972,8 @@ def _fill_one(tab, item, waits, learned=None):
 
     try:
         if kind == 'text':
-            limit = item.get('max')
-            if limit and isinstance(want, str) and len(want) > int(limit):
+            limit = as_limit(item.get('max'))
+            if limit and isinstance(want, str) and len(want) > limit:
                 record.update(why=f'文本 {len(want)} 字超过本字段上限 {limit} 字，没有写入')
                 return False, record
             wrote = _fill_call(tab, 'window.__caFill.write(%d, %s)' % (handle, json.dumps(want)))
@@ -1207,8 +1225,9 @@ def cmd_plan_skeleton(out_path, skip_ok=None):
             item = dict(key=key, label=f['label'], section=f['section'],
                         occurrence=f['occurrence'], nth=f['nth'],
                         kind=kind, value=None)
-            if f['maxlength']:
-                item['max'] = int(f['maxlength'])
+            limit = as_limit(f['maxlength'])
+            if limit is not None:
+                item['max'] = limit
             if f['sensitive']:
                 item['note'] = '敏感字段，默认不写；确需填写要加 sensitive_ok 并经用户确认'
             fields.append(item)

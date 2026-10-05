@@ -60,6 +60,9 @@ input{padding:4px 8px;border:1px solid #bbb;border-radius:4px;width:180px}
 <h3>工作经历</h3>
 <div class="rec">
   <div class="row"><label>公司名称</label><input data-f="company"></div>
+  <!-- maxlength 写成 Infinity：真实站点见过这种写法，浏览器按"没有上限"对待，
+       而把它直接 int() 会抛异常、让整条命令退出。 -->
+  <div class="row"><label>工作描述</label><textarea data-f="duty" maxlength="Infinity"></textarea></div>
 </div>
 
 <script>
@@ -130,6 +133,10 @@ def check_cases(driver, url, out, rows):
          len([f for f in fields if f['label'] == '入学']) == 2
          and sorted(f['nth'] for f in fields if f['label'] == '入学') == [1, 2],
          str([(f['label'], f['nth']) for f in fields if f['label'] == '入学']))
+    junk = [f for f in fields if f['label'] == '工作描述']
+    case('maxlength 是非数字时不崩，且不写 max',
+         len(junk) == 1 and 'max' not in junk[0],
+         '取到的字段：' + str(junk))
     sensitive = [f for f in fields if '敏感' in (f.get('note') or '')]
     case('证件号被标成敏感字段', any('证件' in f['label'] for f in sensitive),
          '标注的有：' + str([f['label'] for f in sensitive]))
