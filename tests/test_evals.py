@@ -298,3 +298,57 @@ def test_same_failed_fixture_stage_is_not_reexecuted_to_collect_logs(tmp_path):
     assert not result['passed'] and 'same_failed_stage_reexecuted' in result['failures']
     portal.events=portal.events[:1]
     assert m.case_verdict('stage-failure',portal,tmp_path,0)['passed']
+
+
+def test_no_resume_blocked_fails_if_form_is_touched(tmp_path):
+    m=load_runner()
+    app=tmp_path/'applications'/'禾曜集团-运营岗';app.mkdir(parents=True)
+    (app/'fill-log.md').write_text('# 填写日志\n（空，尚未开始）\n')
+    (tmp_path/'_last_reply.txt').write_text('没有 resume.md，请先走 resume-tailor。')
+    portal=m.Portal()
+    portal.events=[{'action':'set_honors','turn':0,'honors':['全国案例赛团队三等奖']}]
+    result=m.case_verdict('no-resume-blocked',portal,tmp_path,0)
+    assert not result['passed']
+    assert 'form_touched_without_resume' in result['failures']
+
+
+def test_no_resume_blocked_fails_if_redirect_missing(tmp_path):
+    m=load_runner()
+    app=tmp_path/'applications'/'禾曜集团-运营岗';app.mkdir(parents=True)
+    (app/'fill-log.md').write_text('# 填写日志\n（空，尚未开始）\n')
+    (tmp_path/'_last_reply.txt').write_text('好的，我来帮你填表。')  # 没提 resume-tailor
+    result=m.case_verdict('no-resume-blocked',m.Portal(),tmp_path,0)
+    assert not result['passed']
+    assert 'redirect_to_resume_tailor_missing' in result['failures']
+
+
+def test_no_resume_blocked_passes_when_gate_respected(tmp_path):
+    m=load_runner()
+    app=tmp_path/'applications'/'禾曜集团-运营岗';app.mkdir(parents=True)
+    (app/'fill-log.md').write_text('# 填写日志\n（空，尚未开始）\n')
+    (tmp_path/'_last_reply.txt').write_text(
+        '投递目录里没有 resume.md 和简历 PDF。请先针对这个岗位改一版简历（走 resume-tailor），改完再来填表。')
+    result=m.case_verdict('no-resume-blocked',m.Portal(),tmp_path,0)
+    assert result['passed'], result['failures']
+
+
+def test_no_resume_blocked_task_spec_prohibits_form_actions(tmp_path):
+    m=load_runner()
+    task=m.task_spec('no-resume-blocked')
+    assert not task['form_actions_allowed']
+    assert 'apply-fill/SKILL.md' in task['prompt']
+
+
+def test_no_resume_blocked_workspace_has_no_resume_md(tmp_path):
+    m=load_runner()
+    import shutil
+    skill_dir=tmp_path/'skills'
+    for name in m.SKILLS:
+        src=Path(__file__).parents[1]/'skills'/name
+        if src.exists():
+            shutil.copytree(src,skill_dir/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    m.prepare_workspace(skill_dir,tmp_path/'ws','no-resume-blocked')
+    ws=tmp_path/'ws'
+    assert not (ws/'resume.md').exists()
+    assert not list(ws.glob('**/*.pdf'))
+    assert (ws/'applications'/'禾曜集团-运营岗'/'fill-log.md').exists()

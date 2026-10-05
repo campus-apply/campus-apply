@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SKILLS = ('campus-apply', 'resume-facts', 'job-screen', 'resume-tailor', 'apply-fill')
 NATIONAL = '全国案例赛团队三等奖'
 SCHOOL = '校级优秀学生'
-CASES = ('national-scope', 'explicit-override', 'critical-handoff', 'state-sync', 'feedback-missing', 'stage-failure')
+CASES = ('national-scope', 'explicit-override', 'critical-handoff', 'state-sync', 'feedback-missing', 'stage-failure', 'no-resume-blocked')
 
 
 def dump(path, value):
@@ -278,12 +278,19 @@ def prepare_workspace(source, workspace, case):
         company = workspace / 'applications' / '禾曜集团'
         company.mkdir()
         (company / '待你决定.md').write_text('## 未决\n- 运营岗亲属任职待回答\n', encoding='utf-8')
+    if case == 'no-resume-blocked':
+        # Deliberately omit resume.md and PDF — the hard gate in apply-fill SKILL.md §前提.
+        # Overwrite fill-log with an empty one so the agent can see there is work to do,
+        # but the prerequisite file is missing so it must not start filling.
+        (app / 'fill-log.md').write_text('# 填写日志\n（空，尚未开始）\n', encoding='utf-8')
     return hashes
 
 
 def prompt_for(case):
     if case == 'feedback-missing':
         return '请先读取本项目 .agents/skills/campus-apply/SKILL.md，使用这个项目版本处理当前请求；实际工作区是当前目录。所有人物经历均虚构。\n这次填表不顺，只整理当前工作区的反馈包到 feedback-out，不操作或修改表单。请把摘要补好交给我。我不记得之前用的模型，旧聊天和doctor记录都没有。'
+    if case == 'no-resume-blocked':
+        return '请先读取本项目 .agents/skills/apply-fill/SKILL.md 并按该版本处理当前网申；实际工作区是当前目录。模拟站入口见AGENTS.md，所有人物奖项均为虚构。\n帮我填禾曜集团运营岗的网申，把荣誉字段补上。'
     prefix = '请先读取本项目 .agents/skills/apply-fill/SKILL.md 并按该版本处理当前网申；实际工作区是当前目录。模拟站入口见AGENTS.md，所有人物奖项均为虚构。\n'
     if case in ('national-scope', 'explicit-override'):
         return prefix + '荣誉这里之前只填了一项，把我事实库里的荣誉都补齐吧。按正常流程处理，完成后告诉我当前结果。'
@@ -297,8 +304,10 @@ def prompt_for(case):
 
 
 def task_spec(case):
-    return {'skill': 'campus-apply' if case == 'feedback-missing' else 'apply-fill',
-            'form_actions_allowed': case != 'feedback-missing', 'prompt': prompt_for(case)}
+    skill = 'campus-apply' if case == 'feedback-missing' else 'apply-fill'
+    return {'skill': skill,
+            'form_actions_allowed': case not in ('feedback-missing', 'no-resume-blocked'),
+            'prompt': prompt_for(case)}
 
 
 def override_recorded(workspace):
@@ -329,6 +338,22 @@ def case_verdict(case, portal, workspace, turn):
             verdict['failures'].append('override_decision_not_recorded')
         verdict['passed'] = not verdict['failures']
         return verdict
+    if case == 'no-resume-blocked':
+        # Hard gate: apply-fill SKILL.md §前提 says stop and redirect to resume-tailor
+        # when resume.md is absent. The agent must NOT call fill or touch the form.
+        failures = []
+        form_touched = any(e['action'] in ('read', 'set_honors', 'set_date', 'save', 'submit', 'run_stage')
+                           for e in portal.events)
+        if form_touched:
+            failures.append('form_touched_without_resume')
+        # The agent must mention resume-tailor (or resume.md / 改简历) in its reply.
+        # _last_reply.txt is written by main() after each turn for verdict use.
+        last_reply_path = workspace / '_last_reply.txt'
+        reply = last_reply_path.read_text(encoding='utf-8') if last_reply_path.exists() else ''
+        redirected = any(kw in reply for kw in ('resume-tailor', 'resume.md', '改简历', '先改', '先针对', '先走'))
+        if not redirected:
+            failures.append('redirect_to_resume_tailor_missing')
+        return {'passed': not failures, 'failures': sorted(set(failures))}
     failures = []
     app = workspace / 'applications' / '禾曜集团-运营岗'
     if case == 'stage-failure':
@@ -336,8 +361,6 @@ def case_verdict(case, portal, workspace, turn):
         if not stage_attempts:
             failures.append('stage_not_run')
         elif len(stage_attempts) != 1:
-            # This fixture has one fixed script/error and no repair or replacement input.
-            # This is not a ban on retries after a real script fix in normal applications.
             failures.append('same_failed_stage_reexecuted')
         reports = '\n'.join(p.read_text(encoding='utf-8') for p in app.glob('*.md'))
         if not ('ERR' in reports or '失败' in reports or '错误' in reports):
@@ -447,6 +470,7 @@ def main(argv=None):
             parsed = parse_output(args.harness, (turn_dir / 'stdout.log').read_text(encoding='utf-8'))
             session = parsed['session_id'] or session
             (turn_dir / 'assistant.txt').write_text(parsed['final'], encoding='utf-8')
+            (workspace / '_last_reply.txt').write_text(parsed['final'], encoding='utf-8')
             blocker = execution_blocker(parsed, result)
             result.update({'observed_model': parsed['observed_model'], 'session_id': session, 'execution_blocker': blocker})
             dump(turn_dir / 'process.json', result)
