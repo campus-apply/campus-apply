@@ -197,6 +197,8 @@ def test_in_page_library_forbids_body_click_and_key_events():
 def test_fill_never_presses_submit():
     """The executor only writes fields; pressing 投递/提交 stays the user's action."""
     source = (HERE.parent / 'skills/campus-apply/scripts/browser/chrome_cdp.py').read_text(encoding='utf-8')
-    fill_section = source[source.index('FILL_KINDS = '):source.index('def cmd_screenshot')]
+    # 只圈写入执行路径：从 FILL_KINDS 到 cmd_fill 结束。survey 和 probe-options 在这之后，
+    # 它们会"读"页面上有哪些提交按钮（为了告诉用户哪些不可逆），那是只读的，不在本条约束内。
+    fill_section = source[source.index('FILL_KINDS = '):source.index('def cmd_plan_skeleton')]
     code = '\n'.join(l.split('#')[0] for l in fill_section.splitlines())
     assert 'submit' not in code.lower(), 'fill must not touch submit controls'

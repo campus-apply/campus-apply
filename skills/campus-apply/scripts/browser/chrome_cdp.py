@@ -1326,8 +1326,32 @@ def cmd_survey(out_path):
                    vocabHits: words.filter(w => text.includes(w)), iframes: frames,
                    textLength: text.length };
         })()''')
+        # 页面上的按钮哪些会提交：点错一个就不可逆，所以在同一次探测里一并读出来，
+        # 不要等到要点的时候再单独跑一趟。只读 DOM，不点任何东西。
+        buttons = _fill_call(tab, '''(() => {
+          const vis = el => el.isConnected && (typeof el.checkVisibility === 'function'
+            ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+            : el.getClientRects().length > 0);
+          const clean = t => (t || '').replace(/\\s+/g, ' ').trim();
+          const SUBMIT = ['提交', '投递', '确认投递', '立即投递', '申请职位', '确认提交'];
+          const SAVE = ['保存', '暂存', '临时保存', '保存草稿'];
+          const out = [];
+          for (const el of document.querySelectorAll(
+                 'button, [role=button], input[type=submit], a[class*="btn"], [class*="button"]')) {
+            if (!vis(el)) continue;
+            const text = clean(el.innerText || el.value);
+            if (!text || text.length > 12) continue;
+            const kind = SUBMIT.some(w => text.includes(w)) ? 'submit'
+              : SAVE.some(w => text.includes(w)) ? 'save' : '';
+            if (!kind) continue;
+            if (out.some(o => o.text === text && o.kind === kind)) continue;
+            out.push({ text, kind, tag: el.tagName.toLowerCase(),
+                       type: el.getAttribute('type') || '' });
+          }
+          return out;
+        })()''') or []
         report = dict(url=outline['url'], title=outline['title'],
-                      stable=stable, field_counts=counts,
+                      stable=stable, field_counts=counts, buttons=buttons,
                       sections=sorted({f['section'] for f in outline['fields']}),
                       fields=outline['fields'],
                       probe=probe, upload=uploads)
@@ -1347,6 +1371,12 @@ def cmd_survey(out_path):
                             '本页没有。' + ('正文里出现过 ' + '、'.join(uploads['vocabHits'])
                                             + '，可能在别的页面' if uploads['vocabHits']
                                             else '正文里也没有上传相关的说法')))
+        submits = [b['text'] for b in buttons if b['kind'] == 'submit']
+        saves = [b['text'] for b in buttons if b['kind'] == 'save']
+        if submits:
+            print('不可逆的按钮（永远由用户点）：' + '、'.join(submits))
+        if saves:
+            print('保存类按钮（默认不点，用户说要点才点）：' + '、'.join(saves))
         sensitive = [f['label'] for f in outline['fields'] if f['sensitive']]
         if sensitive:
             print('敏感字段（默认不写）：' + '、'.join(dict.fromkeys(sensitive)))
@@ -1859,6 +1889,41 @@ def take_options(argv):
     return rest
 
 
+def report_idle_gap(threshold=120.0):
+    """看一眼上一条命令是什么时候跑完的，隔得久了就说一声。
+
+    模型没有时钟概念，感知不到自己想了多久——"浏览器空置超过两分钟该说句话"这种规矩只写在
+    文档里是落不了地的。时间只有工具知道，所以让工具报。打到 stderr，不混进 stdout 的数据。
+    """
+    path = os.environ.get('CA_TIMING_FILE', '')
+    if not path:
+        return
+    last = None
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get('started_at') and row.get('elapsed_seconds') is not None:
+                    done = row['started_at'] + row['elapsed_seconds']
+                    if last is None or done > last:
+                        last = done
+    except OSError:
+        return
+    if last is None:
+        return
+    gap = time.time() - last
+    if gap < threshold:
+        return
+    print('# 距上次操作浏览器已经过去 %.0f 分钟——这段时间页面一直就绪、没有命令在跑。'
+          '要么现在动手，要么跟用户说一句在等什么。' % (gap / 60), file=sys.stderr)
+
+
 def write_timing(record):
     """往 CA_TIMING_FILE 追一行 JSONL。只写命令、状态、秒数和墙钟时间，不写字段值或凭证。
 
@@ -1984,6 +2049,7 @@ if __name__ == '__main__':
         pass
     # 每条命令都记一行：什么时候开始、跑了多久、退出码多少。算"浏览器空置"要靠相邻两行的
     # 墙钟时间戳相减——上一条命令结束到下一条命令开始的那段，页面就在那里干等着。
+    report_idle_gap()
     _started_wall, _started = time.time(), time.monotonic()
     _code = 1
     try:
