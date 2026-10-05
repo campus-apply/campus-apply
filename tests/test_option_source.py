@@ -6,8 +6,10 @@
    按 class/role 列举时命中 0 个，于是"面板里没有这一项"，而面板里明明写着那几个字。
    面板那一层已经为同样的理由推翻过按 class 列举，选项层当时没跟着改。
 
-2. 点一下普通文本框，不该算"开出了一个面板"。真实点击必然让包装容器加聚焦态 class，
-   而把它当成面板的后果是整页归零：它收不掉，脏账还留在账本里，之后每条命令都报 ERR_PANELS。
+2. 点一下普通文本框，不该算"开出了一个面板"（聚焦态 class、校验提示都会被误当成面板，
+   后果是整页归零：它收不掉，脏账还留在账本里，之后每条命令都报 ERR_PANELS）。
+   治法不是为每种噪音写一条淘汰规则——那样每加一条就多一种错杀下一个站真面板的方式——
+   而是用一条肯定式判据说清面板是什么：**里面有可点的选项**。详见第 2 节的说明。
 
 3. 探测一失败，模型就会退回"按常识编一个值"。所以面板类字段的值必须有来源，
    而且要在**点开任何面板之前**就拦下来——否则报出来的是"面板里没有这一项"，
@@ -70,44 +72,92 @@ def test_options_in_and_option_both_go_through_the_leaf_finder():
         assert 'optionLeaves(' in body, name + ' 要走按结构找选项那条路'
 
 
-# ---- 2. 聚焦态不是面板 ----
+# ---- 2. 面板是什么，用一条肯定式判据说清 ----
+#
+# 这几条原先守的是三条淘汰规则（"属性变化要从不可见变可见"、"候选不能是控件自己那棵树"、
+# "自己是叶子的不算"）。那三条各自治了一个碰巧见到的误报，但每一条都是在列举"什么不是面板"，
+# 而网页的花样是无穷的：淘汰规则每多一条，就多一种把下一个站的真面板错杀的方式。
+# 一次把真站上所有候选连证据打出来看，真面板和噪音在一个维度上干净地分开了：
+#   控件壳 ant-select…          可点叶子 0
+#   真面板 ant-select-dropdown   可点叶子 12
+#   校验提示 brick-field-hint    可点叶子 0
+# 所以判据换成一条肯定式的：里面有可点的选项。断言跟着这个结论改，不是迁就代码。
 
-def test_attribute_change_counts_as_appearing_only_if_it_became_visible():
-    code = js_code()
-    take = code[code.index('const watchTake'):]
-    take = take[:take.index('\n  };')]
-    assert 'wasVisible' in take, '要和"点击前可不可见"那份快照比'
-    assert '!wasVisible.has(' in take, '只有点击前不可见的才算显形'
-
-
-def test_visibility_snapshot_is_taken_before_the_click_not_in_the_callback():
-    """回调跑的时候属性已经改完了，那时读 visible() 读到的是变化之后的状态。"""
-    code = js_code()
-    start = code[code.index('const watchStart'):]
-    start = start[:start.index('\n  };')]
-    assert 'querySelectorAll' in start and 'wasVisible.add' in start, \
-        '开始观察时就要把全页可见性记一份快照'
-    callback = start[start.index('new MutationObserver'):]
-    assert 'wasVisible.add' not in callback, \
-        '不能在 MutationObserver 回调里判可见性：那时属性已经改完了'
-
-
-def test_the_clicked_controls_own_tree_is_never_a_panel():
+def test_appeared_reports_evidence_and_does_not_decide():
+    """页内只观察、排序、给证据——"就是它"这个结论不在这里下。"""
     code = js_code()
     body = code[code.index('appeared(anchorHandle)'):]
     body = body[:body.index('\n    },')]
-    assert 'contains(anchor)' in body and 'anchor.contains(' in body, \
-        '候选是被点控件自己那棵树时要排除掉'
+    for field in ('optionCount', 'floating', 'sampleTexts', 'gapBelow'):
+        assert field in body, '每个候选要带上判断用得上的事实：' + field
+    assert '.filter(' not in body, \
+        'appeared 不筛候选——筛了就是替调用方下结论，而它看不到截图也问不了用户'
 
 
-def test_note_open_refuses_to_record_the_controls_own_wrapper():
-    """一次误判进了账本就再也销不掉：控件自身永远 isConnected 且 visible。"""
+def test_the_decision_is_one_place_and_can_say_it_cannot_tell():
+    """挑面板的判据只有一处，而且允许它回答"分不出来"。"""
+    code = py_code()
+    assert 'def _pick_panel' in code, '挑面板要有一个单独的地方，不散在各个调用点'
+    body = code[code.index('def _pick_panel'):]
+    body = body[:body.index('\ndef ')]
+    assert "'ambiguous'" in body, '分不出来要能说出来，不能硬挑一个'
+    assert "optionCount" in body and "floating" in body, \
+        '够像的门槛是"有可点选项 + 是浮层"，两条都要'
+
+
+def test_an_unsure_field_does_not_stop_the_whole_page():
+    """探测要一次做完：拿不准的字段标待定、继续往下探，不中断整页。
+    每个拿不准的字段单独停一次，就倒回"反复探索反复请示"的老毛病了。"""
+    code = py_code()
+    body = code[code.index('def cmd_probe_options'):]
+    body = body[:body.index('\ndef ', 1)]
+    assert "'unsure'" in body, '待定要在报告里有自己的 kind'
+    assert 'candidates=' in body, '待定项要把候选和证据交出去'
+    assert 'continue' in body, '待定之后继续探后面的字段'
+
+
+def test_no_elimination_rules_that_could_kill_a_real_panel():
+    """淘汰规则是这里的红线：每加一条就多一种错杀下一个站的方式。"""
+    code = js_code()
+    body = code[code.index('appeared(anchorHandle)'):]
+    body = body[:body.index('\n    },')]
+    for banned, why in (
+        ('wasVisible', '"点击前不可见"会杀掉本来就可见、点击后才填进选项的面板'),
+        ('ownTree', '"不能是控件自己那棵树"会杀掉把下拉渲染在控件内部的站'),
+        ('children.length === 0', '"自己是叶子不算"会杀掉只有一个选项的面板'),
+    ):
+        assert banned not in body, '不该再有这条淘汰规则：' + why
+
+
+def test_the_candidate_pool_itself_filters_nothing():
+    """收候选的那一步只负责收齐，判断留给一个地方做——两处都筛会很难查。"""
+    code = js_code()
+    take = code[code.index('const watchTake'):]
+    take = take[:take.index('\n  };')]
+    assert 'wasVisible' not in take, '候选池不按可见性变化筛'
+    assert 'appeared.add(rec.target)' in take or 'appeared.add(node)' in take, \
+        '新增节点和属性变化都要收进候选池'
+
+
+def test_note_open_records_whatever_appeared_approved():
+    """门后面不再架第二道能错杀的筛子：进门的判据准就够了。"""
     code = js_code()
     body = code[code.index('noteOpen(fieldHandle, panelHandle)'):]
     body = body[:body.index('\n    },')]
-    assert 'return false' in body, '记不了要明确返回 false，不能假装记上了'
-    assert 'contains(field)' in body or 'field.contains(' in body, \
-        '记账之前要再过一遍血缘'
+    assert 'contains(field)' not in body and 'field.contains(' not in body, \
+        '不在记账时再按血缘淘汰：有的站把下拉渲染在控件内部，那样永远记不上账'
+    assert 'return false' in body, '面板已经没了要明确返回 false，不能假装记上了'
+
+
+def test_aim_widens_rather_than_narrows():
+    """自定义控件的常规结构不该被当成故障：这里的改动方向是放宽，不是收紧。"""
+    code = js_code()
+    body = code[code.index('aim(handle)'):]
+    body = body[:body.index('\n    },')]
+    assert 'unit.contains(top)' in body, \
+        '控件自己的皮肤盖在它上面不算遮挡（真正的 input 透明铺在底下是常规写法）'
+    assert "if (!top) return { ok: false, why: 'offscreen'" in body, \
+        'elementFromPoint 返回 null 是"不在视口"，报 covered 会把人带错方向'
 
 
 # ---- 3. 面板类字段的值必须有来源 ----
@@ -190,3 +240,24 @@ def test_check_script_runs_without_models_or_recruitment_sites():
     assert 'tempfile.mkdtemp' in code, '用隔离的浏览器配置目录'
     for banned in ('talent.baidu', 'zhaopin.', 'moka', 'Moka'):
         assert banned not in code, '评测脚本里不许出现真实站点：' + banned
+
+
+# ---- 这条设计约束要写在仓库里，不能只活在一次对话里 ----
+
+def test_the_positive_criterion_rule_is_written_down():
+    """判据要肯定式这件事，是今天花了四轮才换来的结论，得留在 skill 里。"""
+    doc = (HERE.parent / 'skills/apply-fill/references/on-site-principles.md').read_text(
+        encoding='utf-8')
+    assert '判据要肯定式' in doc, '这条约束要写进现场处理原则'
+    assert '淘汰' in doc, '要说清淘汰式判据的代价'
+    assert '排序' in doc, '要写明 class 清单只用于排序、不淘汰候选'
+
+
+def test_class_hints_are_only_ever_used_for_ranking():
+    """两张 class 清单都只能排序。它们是这个文件里仅存的站点特征，别让它们回到淘汰位置。"""
+    code = js_code()
+    for name in ('PANEL_HINT', 'OPTION_HINT'):
+        for line in code.splitlines():
+            if name in line and 'const ' + name not in line:
+                assert 'filter(' not in line and 'querySelectorAll' not in line, \
+                    name + ' 只能用于排序，不能拿去筛候选：' + line.strip()

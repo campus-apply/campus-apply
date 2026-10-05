@@ -108,33 +108,19 @@
     return el && el.isConnected ? el : null;
   };
 
-  // 点击前后的变化观察。面板有两种出法：新插一个节点（挂 body 或 portal 下），
-  // 或者本来就在 DOM 里、靠改样式显形。两种都要认，所以既看新增节点也看属性变化。
-  //
-  // 但"属性变过"不等于"显形"：真实鼠标点一个输入框，框架必然给它的包装容器加个聚焦态
-  // class（实测过 x-input → x-input x-input-focus，那个容器 286×41、本来就可见）。
-  // 把它当成面板的后果是整页归零——它不是面板所以永远收不掉，而且脏账留在 openedByUs 里，
-  // 之后每条命令都报 ERR_PANELS。所以属性变化的节点要再过一道：**点击前不可见、现在可见**
-  // 才算显形。
-  //
-  // 判"点击前"不能在回调里读 visible()——回调跑的时候属性已经改完了，读到的是变化之后的
-  // 状态（第一版就栽在这里：display:none → flex 的面板被判成"本来就可见"，于是整个显形
-  // 这条路断掉）。所以开始观察时先把全页可见性记一份快照，那才是点击前的事实。
-  let watcher = null, appeared = new Set(), attrTouched = new Set(), wasVisible = new WeakSet();
+  // 点击前后的变化观察。面板有两种出法：新插一个节点（挂 body 或 portal 下），或者本来
+  // 就在 DOM 里、靠改样式显形。两种都要认，所以新增节点和属性变化都收进候选池。
+  // 这里只负责"把这一轮动过的节点收齐"，一个都不筛——判断在 appeared() 之后由调用方做。
+  let watcher = null, appeared = new Set();
   const watchStart = () => {
     watchStop();
     appeared = new Set();
-    attrTouched = new Set();
-    wasVisible = new WeakSet();
-    // 点击前的可见性快照。只记可见的那些（WeakSet 不留引用，不拖累 GC）；
-    // 没记进来的要么当时不可见，要么是点击之后才进 DOM 的，两种都该算"新出现"。
-    for (const el of document.querySelectorAll('*')) if (visible(el)) wasVisible.add(el);
     watcher = new MutationObserver(records => {
       for (const rec of records) {
         for (const node of rec.addedNodes)
           if (node.nodeType === 1) appeared.add(node);
         if (rec.type === 'attributes' && rec.target.nodeType === 1)
-          attrTouched.add(rec.target);
+          appeared.add(rec.target);
       }
     });
     watcher.observe(document.documentElement, {
@@ -145,16 +131,15 @@
   const watchStop = () => {
     if (watcher) { watcher.takeRecords(); watcher.disconnect(); watcher = null; }
   };
-  // 取走这一轮真正新出现、且现在可见、够大的节点。新插进来的节点一律算；靠改属性的那些，
-  // 只有"点击前不可见、现在可见"才算显形——否则聚焦高亮、选中态变色这类日常变化都会被
-  // 当成面板。同一棵树里只留最外层那个：两个都是这一轮新出现的，按血缘去重不会误伤常驻容器。
+  // 取走这一轮动过、现在可见、够大的节点。同一棵树里只留最外层那个：两个都是这一轮动过的，
+  // 按血缘去重不会误伤常驻容器。
   const watchTake = () => {
     if (watcher) watcher.takeRecords().forEach(rec => {
       for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
-      if (rec.type === 'attributes' && rec.target.nodeType === 1) attrTouched.add(rec.target);
+      if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
     });
-    // 改属性显形的：点击前那份快照里不可见、现在可见
-    for (const el of attrTouched) if (!wasVisible.has(el)) appeared.add(el);
+    // 新插的节点和改过属性的节点都算候选，这里**不筛**。曾经按"点击前不可见、现在可见"
+    // 筛过一道，那条规则会杀掉"面板本来就可见、点击后才填进选项"的站。
     const fresh = [...appeared].filter(el => el.isConnected && visible(el));
     const out = [];
     for (const el of fresh) {
@@ -335,8 +320,23 @@
       if (r.cx < 0 || r.cy < 0 || r.cx >= innerWidth || r.cy >= innerHeight)
         return { ok: false, why: 'offscreen', rect: r };
       const top = document.elementFromPoint(r.cx, r.cy);
-      if (!el.contains(top) && !(top && top.contains(el)))
-        return { ok: false, why: 'covered', by: top ? clean(top.className) || top.tagName : '?', rect: r };
+      // elementFromPoint 返回 null 说明那个坐标上什么都没有——元素不在视口里，不是被挡住。
+      // 报成 covered 会把人带到错误的方向上（去查"谁挡住了它"，而答案是"它根本不在视口"）。
+      // 中心点的 offscreen 检查漏得掉这种：元素跨在视口边缘，中心点算出来落在外面。
+      if (!top) return { ok: false, why: 'offscreen', rect: r };
+      // 挡住它的是不是它自己的皮肤。自定义下拉几乎都是这个结构：真正的 input 透明地铺在
+      // 底下，上面盖一层显示选中值的节点（实测 ant-select-selection-item），两者是**兄弟**，
+      // 所以 contains 两个方向都不成立，于是判成 covered——而人点上去是完全正常的。
+      // 放宽到"同一个控件单元内"：从控件往上找最近的那个只含它一个输入控件的容器，
+      // 命中的节点在这个容器里就算点到了它自己。超出这个范围的才是真的被别的东西挡住
+      // （真遮挡要拦住：面板盖在后面的控件上、整页遮罩，那些点下去会点到不该点的东西）。
+      let unit = el;
+      for (let node = el.parentElement, d = 0;
+           node && node !== document.body && d < 4
+           && node.querySelectorAll('input:not([type=hidden]),textarea,select').length <= 1;
+           node = node.parentElement, d++) unit = node;
+      if (!(el.contains(top) || top.contains(el) || unit.contains(top)))
+        return { ok: false, why: 'covered', by: clean(top.className) || top.tagName, rect: r };
       return { ok: true, rect: r };
     },
 
@@ -400,43 +400,73 @@
 
     // 取这一轮点击之后新出现的候选，按"更像面板"排序后返回。排序只影响先试哪个，
     // 不会把任何候选排除掉——某个站的面板既不在输入框上方也不在下方，而是盖在它身上。
+    // 点了之后页面上出现的候选，按"更像面板"排序，**连证据一起报出来**。
+    //
+    // 这里只观察和排序，不替调用方下"就是它"的结论——这是 2026-10-05 用六轮返工换来的分工。
+    // 那六轮一直在往这里加淘汰规则（"属性变化要从不可见变可见"、"候选不能是控件自己那棵树"、
+    // "自己是叶子的不算"、"必须是浮层"），每一条都是拿一个碰巧见到的形状反推"什么不是面板"。
+    // 网页的花样是无穷的：淘汰规则每多一条，就多一种把下一个站的真面板错杀的方式——
+    // 把下拉渲染在控件内部的站、选项异步加载刚打开时是空的站、面板本来就可见只是点击后才
+    // 填进选项的站，分别会被上面几条各杀一次。而错杀是悄悄做错事，比报"认不准"坏得多。
+    //
+    // 1.0.0 的分工本来是对的（`lib_antd3.js` 开头："下面的值只是一个示例，换站点在 stage 里
+    // 覆盖"）：代码给动作原语，"这个站的面板长什么样"由 agent 看一眼现场定。1.3.0 为了省掉
+    // 浏览器空置，把这件事交给代码去猜，于是有了那六轮。现在合起来：**代码观察、排序、给证据，
+    // 唯一候选就自己走（绝大多数站是这样，空置照样省），有歧义才把证据交给 agent**。
+    //
+    // 每个候选都带上判断用得上的事实，让看的人（或模型）自己定：
+    //   optionCount  里面有几个可点的叶子——真面板 12、控件壳 0、校验提示 0、字段容器 2
+    //   floating     脱离文档流或挂在 body 下（下拉浮层必然如此，字段容器必然不是）
+    //   sampleTexts  前几个叶子的文字——是一排同类选项，还是"姓名 / 请输入姓名"这种标签加提示
+    //   gapBelow     面板顶边离控件底边多远（负数表示盖在控件上，那也是真见过的形状）
     appeared(anchorHandle) {
       const anchor = anchorHandle ? get(anchorHandle) : null;
       const box = anchor ? rectOf(anchor) : null;
-      // 第二道防线，独立于"显形"那条判据：候选如果就是被点控件自己（或它的包装容器、或
-      // 它身上的某个后代），一律不是面板。面板是另开一层给你选东西的，不会是控件自身那棵树。
-      // 只靠显形判据也能挡住聚焦高亮，但组件库的花样太多（选中态、校验态、展开箭头转向），
-      // 这一条按血缘拦，和具体是什么样式变化无关。
-      const ownTree = el => anchor && (el.contains(anchor) || anchor.contains(el));
-      const scored = watchTake().filter(el => !ownTree(el)).map(el => {
-        const r = rectOf(el);
-        let score = 0;
-        if (el.matches(PANEL_HINT)) score += 4;                  // 像面板的词
-        if (optionLeaves(el).length >= 2) score += 3;             // 里面有好几个能点的叶子
+      const floatingOf = el => {
         const pos = getComputedStyle(el).position;
-        if (pos === 'fixed' || pos === 'absolute') score += 2;   // 浮层多半脱离文档流
+        return pos === 'fixed' || pos === 'absolute'
+          || el.parentElement === document.body
+          || el.parentElement === document.documentElement;
+      };
+      const scored = watchTake().map(el => {
+        const r = rectOf(el);
+        const leaves = optionLeaves(el);
+        const floating = floatingOf(el);
+        let score = 0;
+        // 打分只影响"先试哪个"和"像不像"，不淘汰任何候选。
+        if (leaves.length >= 2) score += 4;                      // 里面有一排能点的东西
+        if (floating) score += 3;                                // 浮层，不是页面本身的一块
+        if (el.matches(PANEL_HINT)) score += 2;                  // 命中那套常见的词
         if (box) {
           const overlapX = Math.min(r.x + r.w, box.x + box.w) - Math.max(r.x, box.x);
-          if (overlapX > 0) score += 2;                          // 和输入框横向有重叠
+          if (overlapX > 0) score += 2;                          // 和控件横向有重叠
           const gap = Math.min(Math.abs(r.y - (box.y + box.h)), Math.abs(box.y - (r.y + r.h)));
           score += Math.max(0, 3 - gap / 40);                    // 离得越近越像，但远也不淘汰
         }
-        return { el, score, rect: r };
+        return {
+          el, score, rect: r, floating,
+          optionCount: leaves.length,
+          sampleTexts: leaves.slice(0, 4).map(x => clean(x.innerText).slice(0, 16)),
+          gapBelow: box ? Math.round(r.y - (box.y + box.h)) : null,
+        };
       }).sort((a, b) => b.score - a.score);
-      return scored.map(s => ({ handle: register(s.el), rect: s.rect,
-                               score: Math.round(s.score * 100) / 100,
-                               cls: clean(s.el.className).slice(0, 80) }));
+      return scored.map(s => ({
+        handle: register(s.el), rect: s.rect,
+        score: Math.round(s.score * 100) / 100,
+        cls: clean(s.el.className).slice(0, 80) || s.el.tagName,
+        floating: s.floating, optionCount: s.optionCount,
+        sampleTexts: s.sampleTexts, gapBelow: s.gapBelow,
+      }));
     },
 
     // 记下"这个字段开出来的面板是它"，以及收掉之后销账。
-    // 记下"这个字段开出来的面板是它"，以及收掉之后销账。记之前再过一遍血缘：控件自己那棵树
-    // 不是面板。一次误判进了这本账就再也销不掉（控件自身永远 isConnected 且 visible），
-    // 从此这一页每条命令都报 ERR_PANELS——所以这里宁可不记，也不能记错。
+    //
+    // 这里不再加"不能是控件自己那棵树"之类的血缘淘汰：有的站把下拉就渲染在控件内部
+    // （antd 的 getPopupContainer 配一下就是这样），那条规则会让它永远记不上账。
+    // 进这本账的面板由调用方挑定——挑准了是调用方的责任，这里只负责记。
     noteOpen(fieldHandle, panelHandle) {
       const panel = get(panelHandle);
-      const field = get(fieldHandle);
       if (!panel) return false;
-      if (field && (panel.contains(field) || field.contains(panel))) return false;
       openedByUs.set(fieldHandle, panel);
       return true;
     },

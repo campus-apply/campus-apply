@@ -767,21 +767,48 @@ def _wait_for(tab, expr, want, budget):
         time.sleep(0.03)
 
 
-def _panel_for(tab, handle, budget, note=True):
-    """找这次点击开出来的面板：取点击之后新出现的节点，按"更像面板"排序取第一个。
+# 认面板的两条分界线。它们不是"什么不是面板"的淘汰规则，而是"什么时候代码可以自己定、
+# 什么时候该把证据交给 agent"的分界：
+#   有可点选项、又是浮层的候选，才算够像面板，代码敢自己挑；
+#   一个都不够像 → 报"没出现面板"（文本框就是这样，正常）；
+#   够像的有两个以上、分不出 → 报"认不准"，把候选连证据交出去，不猜。
+# 2026-10-05 用六轮返工换来的分工：代码观察、排序、给证据，不替 agent 下不可逆的结论。
+def _panel_candidates(tab, handle, budget):
+    """点击之后出现的候选，连证据一起返回（已按"更像面板"排序）。不记账、不挑。"""
+    expr = 'window.__caFill.appeared(%d)' % handle
+    ok, found = _wait_for(
+        tab, expr,
+        lambda v: bool(v) and any(c.get('optionCount') and c.get('floating') for c in v),
+        budget)
+    return found or []
 
-    不按 class 全局列举，也不用几何淘汰。两个真实站点给过两种相反的死法：一个站的真面板
-    被同样命中选择器的祖先容器吞掉，另一个站的面板盖在输入框上、被"必须紧贴若干像素"的
-    配对规则扔掉。面板是点出来的，所以"这一轮新出现"才是它的本质特征，几何只用于排序。
+
+def _pick_panel(candidates):
+    """从候选里挑出唯一那个够像面板的。挑不出就不挑——返回 (None, 原因, 够像的那几个)。
+
+    "够像"= 里面有可点的选项（optionCount > 0）且是浮层（floating）。这两条合起来描述的是
+    面板本身：一层浮在页面上方、装着一排能点的东西。字段容器里也有带文字的叶子（标签 +
+    校验提示），但它在文档流里；控件壳是浮层的一部分却没有可点的选项；两者都过不了这道门，
+    而不必为它们各写一条淘汰规则。
+    """
+    likely = [c for c in candidates if c.get('optionCount') and c.get('floating')]
+    if not likely:
+        return None, 'none', []
+    if len(likely) > 1 and likely[0]['score'] - likely[1]['score'] < 2:
+        # 分数咬得很近，说明代码确实分不出来。这时猜一个的代价是悄悄操作错东西。
+        return None, 'ambiguous', likely
+    return likely[0], 'ok', likely
+
+
+def _panel_for(tab, handle, budget, note=True):
+    """挑定这次点击开出来的面板；挑不出返回 None。歧义要看证据的场合用上面两个函数。
 
     note=False 时只看不记账：级联的第 2 级要先问一句"有没有新面板"，而这一问不该在账本上
     留痕——答案是"没有"的时候，记进去的那个候选（选中态变色的选项格子之类）再也销不掉。
     """
-    expr = 'window.__caFill.appeared(%d)' % handle
-    ok, found = _wait_for(tab, expr, lambda v: bool(v), budget)
-    if not ok or not found:
+    panel, _why, _likely = _pick_panel(_panel_candidates(tab, handle, budget))
+    if panel is None:
         return None
-    panel = found[0]
     if note:
         _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
     return panel
@@ -1503,7 +1530,7 @@ def cmd_probe_options(out_path, only=None):
             print(f'ERR_JS: 注入填写库失败：{err}')
             return 1
         fields = _fill_call(tab, 'window.__caFill.outline()')['fields']
-        out, learned = [], None
+        out, learned, unsure = [], None, 0
         for f in fields:
             key = ' / '.join(str(x) for x in
                              (f['section'], f['occurrence'], f['label'], f['nth']) if x != '')
@@ -1527,11 +1554,31 @@ def cmd_probe_options(out_path, only=None):
             except TabError as e:
                 out.append(dict(key=key, label=f['label'], error=str(e)))
                 continue
-            panel = _panel_for(tab, f['handle'], 2.0)
+            # 挑面板分三种结果：挑中了往下探；一个候选都不够像，那就是普通文本框；
+            # 够像的有好几个而分不出来，**标成待定、把候选交出去，继续探后面的字段**。
+            # 待定不中断整页——"探完再填"要的是一次探完、一次问完，每个拿不准的字段单独停
+            # 就倒回"反复请示"的老毛病了。待定项攒着，探完一起交给 agent 看（必要时截图）。
+            candidates = _panel_candidates(tab, f['handle'], 2.0)
+            panel, why, likely = _pick_panel(candidates)
+            if panel is None and why == 'ambiguous':
+                _close_panels(tab, f['handle'], 2.0, learned)
+                out.append(dict(key=key, label=f['label'], kind='unsure',
+                                note='认不准哪个是面板，没动它。候选见 candidates，'
+                                     '确认后用 --only 单独探这个字段，或在计划里直接给值',
+                                candidates=[dict(cls=c['cls'], score=c['score'],
+                                                 optionCount=c['optionCount'],
+                                                 floating=c['floating'],
+                                                 gapBelow=c['gapBelow'],
+                                                 sampleTexts=c['sampleTexts'])
+                                            for c in likely[:4]]))
+                unsure += 1
+                continue
             if panel is None:
                 out.append(dict(key=key, label=f['label'], kind='text?',
                                 note='点了没出现面板，多半是普通文本框'))
                 continue
+            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)'
+                       % (f['handle'], panel['handle']))
             opts = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % panel['handle']) or []
             # 面板里并排几组选项：两组以上是多级控件（年份一列 + 月份一格），计划要写 cascader。
             # 按结构数，不按 class 猜——猜错了 kind，计划走的就是另一条执行路径。
@@ -1563,6 +1610,9 @@ def cmd_probe_options(out_path, only=None):
                             kind=('cascader' if groups >= 2
                                   else 'search' if f['maxlength'] else 'dropdown'),
                             option_groups=groups,
+                            # 面板是哪个节点。读不出选项时这是唯一能查下去的线索——
+                            # 没有它，每次真站上遇到就得现场重新装观察器复现一遍。
+                            panel=panel.get('cls', '')[:60],
                             options=opts[:200], count=len(opts),
                             probed_with=opts[0] if revealed else None,
                             revealed=revealed,
@@ -1574,7 +1624,7 @@ def cmd_probe_options(out_path, only=None):
         still = _fill_call(tab, 'window.__caFill.stillOpen()') or []
         where = _fill_call(tab, 'location.href')
         report = dict(url=where, close_trick=learned,
-                      open_panels=len(still), fields=out)
+                      open_panels=len(still), unsure=unsure, fields=out)
         try:
             with open(out_path, 'w', encoding='utf-8') as fh:
                 json.dump(report, fh, ensure_ascii=False, indent=1)
@@ -1598,8 +1648,14 @@ def cmd_probe_options(out_path, only=None):
             print('注意：上面这些是条件字段，探测时选的值已经留在控件里，'
                   '填写时要按真实值重写一遍')
         print(f'OPTIONS {len(out)} 个控件探过'
+              + (f'，其中 {unsure} 个认不准、没动它' if unsure else '')
               + (f'，收面板用的是 {learned}' if learned else '')
               + f' → {out_path}')
+        if unsure:
+            print(f'有 {unsure} 个字段认不准哪个是面板。报告里 kind 是 unsure 的那几条带着候选'
+                  '和证据（optionCount / floating / gapBelow / sampleTexts）——')
+            print('  看一眼就能定的话，用 --only 单独探它；拿不准就截一张图'
+                  '（screenshot）看看那个控件点开长什么样，别猜。')
         if still:
             print(f'ERR_PANELS 我们开的面板还有 {len(still)} 个没收掉')
             return 1
