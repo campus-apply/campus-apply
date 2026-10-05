@@ -5,6 +5,12 @@ description: "Use when an application form or online resume page is open in the 
 
 # apply-fill：陪跑式填网申
 
+## 对用户说话（这一条每个 skill 都重复一遍，因为可能只载入了这一个）
+
+技能名、步骤编号、文件路径、规则原文都是内部信息，**不进对用户说的话**。不说"这是 xx 技能第几步要求的"、
+"按 xx 的规定"，更不要附上 SKILL.md 的路径。用户关心的是这件事对他有什么后果。
+"依据"只有三种：**页面原文、站点笔记里实测过的结论、或者"不知道"**——技能规定不是依据。
+
 网申流程不固定。本 skill 是一个循环：**看这一页 → 说清楚 → 该用户做的等用户 → 该我做的做完回读 → 记一笔 → 下一页**。细则按步骤看 `references/`，别凭记忆。资料复用、清单更新和工具结束后的交接按 `../campus-apply/references/workflow-state.md`。
 
 ## 前提

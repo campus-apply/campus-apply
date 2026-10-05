@@ -5,6 +5,12 @@ description: "Use when the user has picked a target job and the generic resume d
 
 # resume-tailor：对照 JD 改简历与网申文本
 
+## 对用户说话（这一条每个 skill 都重复一遍，因为可能只载入了这一个）
+
+技能名、步骤编号、文件路径、规则原文都是内部信息，**不进对用户说的话**。不说"这是 xx 技能第几步要求的"、
+"按 xx 的规定"，更不要附上 SKILL.md 的路径。用户关心的是这件事对他有什么后果。
+"依据"只有三种：**页面原文、站点笔记里实测过的结论、或者"不知道"**——技能规定不是依据。
+
 ## 前提
 - 当前目录有 `campus-apply.json`（没有先用 resume-facts）。
 - 有一份 JD：在 `applications/<公司>-<岗位>/jd.md`（job-screen 建的），或用户现给的文本/链接（先存成 jd.md）。

@@ -5,6 +5,12 @@ description: "Use when the user points at a company recruitment site and asks wh
 
 # job-screen：在公司招聘页上筛岗位
 
+## 对用户说话（这一条每个 skill 都重复一遍，因为可能只载入了这一个）
+
+技能名、步骤编号、文件路径、规则原文都是内部信息，**不进对用户说的话**。不说"这是 xx 技能第几步要求的"、
+"按 xx 的规定"，更不要附上 SKILL.md 的路径。用户关心的是这件事对他有什么后果。
+"依据"只有三种：**页面原文、站点笔记里实测过的结论、或者"不知道"**——技能规定不是依据。
+
 每一步都有"给用户看、等用户说"的停顿，不把两步并成一步。清单、待决和关联记录更新及交接按 `../campus-apply/references/workflow-state.md`。
 
 ## 前提
@@ -13,6 +19,16 @@ description: "Use when the user points at a company recruitment site and asks wh
 - 浏览器操作用 `../campus-apply/scripts/browser/chrome_cdp.py`（见总控 skill 的 `references/browser-tools.md`），配合同目录的 `guard.js`、`read_page.js`、`probe.js`、`lib_net.js`。
 - 节奏分两档，整个 skill 通用：不登录就能看的页面，每次请求或翻页之间停 0.3–0.6 秒，最多 3 个标签页并行（`open` 各自认领、各跑各的进程，`read-urls` 用同一个 `--stop-file`，一处撞到验证码全部停）；登录后才能看的页面，单标签页，停 0.8–1.5 秒。表单页永远单标签页。
 - 开始时把文末的执行清单复制成 `applications/<公司>/job-screen-执行清单_<日期>.md`，做到哪勾到哪。
+
+## 开场先讲清这是两步走
+
+筛岗分两步，**第一句话就要跟用户说明**，否则他会把第一步的等待当成白等：
+
+> 我先用机器把全部 N 个岗位过一遍，按硬门槛分成三档（大概 X 分钟）；你从里面圈几个，我再逐字精读那几个、
+> 给你适配性对照。
+
+**时间预算**：从认领标签页到交出筛选表，**浏览器加模型合计不超过 5 分钟**。超了就是哪一步做多了——
+最常见的是抽样核对做太多份、或者现写脚本去排版。两样都有现成办法（抽样 2 份够了，出表用 `screen_render.py`）。
 
 ## 步骤
 0. **偏好确认**：读 `campus-apply.json` 的 `preferences`，复述给用户（投什么、岗位类型要与不要、地点、海外、语言、提前入职），问这次投这家有没有变化，有就改写回去。用户看到清单（第 3 步）或摘要（第 5 步）后改主意很正常，那两处停顿里说的任何偏好变化当场写回，并据此重标状态。
