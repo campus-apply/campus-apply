@@ -14,5 +14,5 @@
 
 耗时：全程 … 分钟；其中命令占用 … 分钟、浏览器空置 … 分钟（开 `CA_TIMING_FILE` 后跑 `scripts/idle_report.py` 得到）。空置是页面已经就绪、却没有命令在跑的时间，最长的几段出现在哪两步之间也写上。
 
-guard 记录：开始 / 各页后 / 结束（captcha、loginRedirect 都为 false 才算完成）。
+guard 记录：开始 / 各页后 / 结束（`captcha`、`requiresLogin`、`blocked` 三个结论都为空才算完成；`loginRedirect`、`captchaWords` 这些是证据，记下来备查，不拿它们判完成）。
 下一步：请用户自己通读页面，再决定点"提交"。

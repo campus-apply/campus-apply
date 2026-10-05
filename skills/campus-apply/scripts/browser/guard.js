@@ -1,5 +1,10 @@
-// guard.js —— 只读检测：人机验证 / 登录跳转 / 可见遮罩弹窗 / 浏览器错误页与上网认证跳转（blocked）。
+// guard.js —— 只读检测：人机验证 / 要不要登录 / 可见遮罩弹窗 / 浏览器错误页与上网认证跳转（blocked）。
 // 单独注入时返回 JSON 字符串；作为 LIBS 引入时 stage 可调用 window.__caGuard()。
+//
+// 调用方该消费哪些字段：**captcha、requiresLogin、blocked、visibleModals** 这四个是结论。
+// loginRedirect / captchaWords / identityHits 这些是证据，留着给人看、给日志留底，
+// 别拿它们当停不停的依据——误报的代价是停下来等用户处理一件并不存在的事，
+// 而漏报的代价是在被挡住的页面上继续填。两头都踩过，样本见待处理 16。
 window.__caGuard = function () {
   // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
   // 下拉面板基本都是 fixed，拿它判会整类漏掉。
@@ -69,6 +74,23 @@ window.__caGuard = function () {
   const errorWords = ['您的连接不是私密连接', '你的连接不是专用连接', 'Your connection is not private', 'NET::ERR_', '无法访问此网站', '找不到服务器', 'This site can’t be reached', 'This site can\'t be reached', 'ERR_CONNECTION', 'ERR_CERT'].filter(k => text.includes(k) || document.title.includes(k));
   const portalWords = ['校园网', '上网认证', '网络认证', 'Portal 认证', '认证登录', '宽带认证', 'captive portal', 'Wi-Fi 登录'].filter(k => text.slice(0, 3000).includes(k) || document.title.includes(k));
   const blocked = errorPage || errorWords.length > 0 ? 'browser-error' : portalWords.length > 0 ? 'captive-portal' : '';
-  return { url, title: document.title, captcha: hits.length > 0 || words.length > 0, captchaHits: hits, captchaWords: words, loginRedirect, loginWords, loggedIn, identityHits, identityWords, visibleModals, modalText, maskOnly, blocked, blockedWords: errorWords.concat(portalWords), ts: Date.now() };
+  // 人机验证：**命中控件才算在验证，光是正文里有那几个字不算。**
+  // 误报样本（待处理 16）：一个已登录的在线简历页，账号设置菜单里有"安全验证"四个字，
+  // guard 报 captcha:true 而 captchaHits 是空的。代价是停下来等用户处理一个并不存在的验证，
+  // 而"安全验证""请输入验证码"这类词出现在菜单、帮助文案、隐私条款里太常见了。
+  // 词仍然有用，但只当旁证：页上真的压着一层东西（弹窗或遮罩）时，词才参与判定——
+  // 验证码弹层有时整个挂在 iframe 或 shadow DOM 里，控件选择器够不到，这时词是唯一的线索。
+  const somethingOnTop = visibleModals > 0 || maskOnly > 0;
+  const captcha = hits.length > 0 || (words.length > 0 && somethingOnTop);
+  // 这一页要不要登录。loginRedirect 只说明"当前这个页面是登录页，或页上有登录入口"，
+  // 回答不了"该不该停下来让用户登录"——2026-10-04 的教训是 agent 自己点了登录按钮跳过去，
+  // 再看见 loginRedirect 为真就当成站点要求登录。身份证据比入口硬：看得见这个账号的身份，
+  // 就说明不用再登录一次。调用方该消费的是这个字段，不是 loginRedirect。
+  const requiresLogin = loginRedirect && !loggedIn;
+  return { url, title: document.title, captcha, captchaHits: hits, captchaWords: words,
+    captchaWordsOnly: hits.length === 0 && words.length > 0,
+    loginRedirect, requiresLogin, loginWords, loggedIn, identityHits, identityWords,
+    visibleModals, modalText, maskOnly, blocked,
+    blockedWords: errorWords.concat(portalWords), ts: Date.now() };
 };
 JSON.stringify(window.__caGuard());

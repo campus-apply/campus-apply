@@ -1867,15 +1867,27 @@ def cmd_read_urls(list_path, out_dir, start=1, end=999999):
                 gd = json.loads(g)
             except ValueError:
                 gd = {}
-            print(f"  progress {n} guard captcha {gd.get('captcha')} login {gd.get('loginRedirect')}")
-            if gd.get('captcha') or gd.get('loginRedirect'):
+            # guard 报的四个结论都要消费。原先只看 captcha 和 loginRedirect，于是
+            # 浏览器错误页和上网认证跳转（blocked）照读不停——读回来的是认证页的正文，
+            # 几百条全是垃圾；而 loginRedirect 这个字段只说明"这页是登录页或有登录入口"，
+            # 已登录的页面上也会为真，拿它当停的依据就是在误停。要停的理由一起说清。
+            reasons = []
+            if gd.get('captcha'):
+                reasons.append('人机验证')
+            if gd.get('requiresLogin'):
+                reasons.append('要求登录')
+            if gd.get('blocked'):
+                reasons.append(gd['blocked'])
+            print(f"  progress {n} guard captcha {gd.get('captcha')}"
+                  f" login {gd.get('requiresLogin')} blocked {gd.get('blocked') or '-'}")
+            if reasons:
                 if stop_file:
                     try:
                         with open(stop_file, 'w', encoding='utf-8') as f:
                             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {os.environ.get('TAB_MARK', '')} {g}\n")
                     except OSError:
                         pass
-                print(f'STOP guard: {g}')
+                print(f"STOP guard（{'、'.join(reasons)}）: {g}")
                 break
     print(f'done {ok}/{n}')
     return 0

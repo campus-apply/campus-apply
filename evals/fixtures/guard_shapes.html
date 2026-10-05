@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构招聘站：guard 判据测试台</title>
+<!--
+  本地测试用的虚构页面，不连任何招聘站，内容全是编的。
+
+  guard.js 判四件事：有没有人机验证、是不是要登录、页上压着几层弹窗、浏览器层面有没有被挡住。
+  这一页是它的判据测试台——每种形状一个查询参数，判的都是"应该报什么"。
+  站名不写进 fixture（结论归站点笔记），只记结构；class 名用公开组件库的形状。
+
+  形状 1（?case=mentions-verify）正文提到验证字样，但页上没有任何验证控件
+    真实样本：一个已登录的在线简历页，正文里出现"安全验证"四个字（在账号设置的菜单项里），
+    guard 报 captcha:true 而 captchaHits:[]——没有命中任何一个验证控件选择器，
+    纯粹是正文里有那几个字。同时 loggedIn:true、visibleModals:0、blocked 为空。
+    **误报的代价是停下来等用户处理一个并不存在的验证**，而正文提到某个词太常见了。
+    判据应当是：有控件命中就报；只有词命中时，词只是旁证，要配合"页上真的有个东西挡着"
+    才算——否则只记进 captchaWords 供人看，不把 captcha 拉成 true。
+
+  形状 2（?case=real-captcha）真的在做人机验证
+    一个 fixed 的滑块容器，class 含 slider-verify，盖住页面。这时必须报 captcha:true。
+
+  形状 3（?case=resident-login）常驻的登录入口，人其实已经登录了
+    页头有"手机号登录""获取验证码"两个常驻菜单词（登录面板是收起的、不可见），
+    同时有头像和"退出登录"。老判据只数登录用词，两个就判 loginRedirect=true，
+    于是一个已登录的页面被当成"要求登录"。
+    判据应当是：loggedIn 为真时，登录用词不足以判定要登录——身份证据比词硬。
+
+  形状 4（?case=real-login）真的要登录
+    有密码框、有登录按钮、没有任何身份迹象。必须报要登录。
+
+  形状 5（?case=modal）一个可见的确认弹窗
+    结构照抄常见组件库：遮罩和弹窗体是兄弟节点、互不包含（所以按包含关系去重去不掉，
+    会把一个弹窗数成两个），遮罩自己没有文字。必须报 visibleModals:1、maskOnly:1。
+
+  形状 6（?case=iframe-captcha）验证码整个在一个 iframe 里，而那个 iframe 的 class 不含验证字样
+    真实世界里验证码常常是第三方的，整层挂在 iframe 或 shadow DOM 里，控件选择器够不到；
+    这时正文里的"请完成验证"可能是唯一的线索。所以"命中控件才算"这条不能一刀切——
+    **词 + 页上真的压着一层东西**也要算。这一条守的是不许为了治误报而制造漏报：
+    guard 必须报 captcha:true。
+
+  留给判卷的只读接口（驱动代码不许读）：window.fixtureTruth()
+-->
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 0; }
+  header { display: flex; gap: 16px; align-items: center;
+           padding: 12px 24px; border-bottom: 1px solid #eee; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: #ddd; }
+  main { padding: 24px; max-width: 800px; }
+  .menu { display: flex; gap: 12px; margin-left: auto; font-size: 13px; color: #666; }
+  /* 真验证：fixed 滑块盖住页面 */
+  .slider-verify-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+                        display: none; place-items: center; z-index: 100; }
+  .slider-verify-wrap.on { display: grid; }
+  .slider-verify-box { width: 340px; height: 200px; background: #fff; border-radius: 8px;
+                       display: grid; place-items: center; }
+  /* 收起的登录面板：在 DOM 里但不可见 */
+  .login-panel { display: none; }
+  /* 弹窗：遮罩与弹窗体是兄弟节点、互不包含，遮罩无文字 */
+  .x-modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; z-index: 90; }
+  .x-modal-wrap { position: fixed; inset: 0; display: none; place-items: center; z-index: 91; }
+  .x-modal-mask.on { display: block; }
+  .x-modal-wrap.on { display: grid; }
+  .x-modal-body { width: 420px; background: #fff; border-radius: 8px; padding: 24px; }
+  /* 形状 6：class 里刻意不含 captcha / verify / slider 任何一个词 */
+  .third-party-layer { position: fixed; inset: 0; background: rgba(0,0,0,.5);
+                       display: none; place-items: center; z-index: 95; }
+  .third-party-layer.on { display: grid; }
+  .third-party-layer > iframe { width: 340px; height: 200px; border: 0; background: #fff; }
+</style>
+
+<header>
+  <strong>虚构招聘站</strong>
+  <div class="menu" id="menu"></div>
+  <div class="avatar" id="avatar" hidden></div>
+</header>
+
+<main>
+  <h1 id="heading">我的简历</h1>
+  <p id="body-text"></p>
+
+  <!-- 真登录页用：密码框 -->
+  <form id="login-form" hidden>
+    <label>账号 <input id="acct" name="account"></label>
+    <label>密码 <input id="pwd" type="password" name="password"></label>
+    <button type="button">登录</button>
+  </form>
+
+  <!-- 收起的登录面板：形状 3 用，它在 DOM 里但不可见 -->
+  <div class="login-panel" id="login-panel">
+    <p>手机号登录</p><p>获取验证码</p>
+  </div>
+</main>
+
+<!-- 真验证：形状 2 -->
+<div class="slider-verify-wrap" id="captcha">
+  <div class="slider-verify-box">请拖动滑块完成验证</div>
+</div>
+
+<!-- 形状 6：验证码在 iframe 里，容器的 class 不含任何验证字样 -->
+<div class="third-party-layer" id="iframe-captcha">
+  <iframe id="cap-frame" title="third party widget" src="about:blank"></iframe>
+</div>
+
+<!-- 弹窗：形状 5，遮罩与弹窗体是兄弟 -->
+<div class="x-modal-mask" id="mask"></div>
+<div class="x-modal-wrap" id="modal">
+  <div class="x-modal-body">
+    <h3>提示</h3>
+    <p>是否根据上传的附件刷新表单信息？刷新后原来的信息将被覆盖。</p>
+    <button type="button">覆盖</button><button type="button">仅替换</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const kase = params.get('case') || 'mentions-verify';
+
+  // 每种形状的真值：guard 应当报什么
+  const CASES = {
+    // 正文提到验证字样，但页上没有验证控件，而且人已经登录
+    'mentions-verify': {
+      menu: ['账号设置', '安全验证', '我的投递'],
+      text: '补全简历信息，面试官才能更全面地了解你。安全验证已开启。',
+      avatar: true,
+      truth: { captcha: false, requiresLogin: false, loggedIn: true, modals: 0 },
+    },
+    // 真的在做人机验证
+    'real-captcha': {
+      menu: ['账号设置'],
+      text: '请完成验证后继续。',
+      avatar: true, captcha: true,
+      truth: { captcha: true, requiresLogin: false, loggedIn: true, modals: 0 },
+    },
+    // 常驻登录入口 + 已登录的身份证据
+    'resident-login': {
+      menu: ['手机号登录', '获取验证码', '退出登录'],
+      text: '我的简历 · 我的投递。',
+      avatar: true,
+      truth: { captcha: false, requiresLogin: false, loggedIn: true, modals: 0 },
+    },
+    // 真的要登录：密码框、登录字样、没有任何身份迹象
+    'real-login': {
+      menu: [],
+      heading: '登录',
+      text: '请登录后查看。账号登录 / 手机号登录。',
+      loginForm: true,
+      truth: { captcha: false, requiresLogin: true, loggedIn: false, modals: 0 },
+    },
+    // 验证码在 iframe 里，容器 class 不含验证字样：词 + 有东西压着，必须报
+    'iframe-captcha': {
+      menu: ['账号设置'],
+      text: '请完成验证后继续操作。',
+      avatar: true, iframeCaptcha: true,
+      truth: { captcha: true, requiresLogin: false, loggedIn: true, modals: 0 },
+    },
+    // 一个可见的确认弹窗
+    'modal': {
+      menu: ['账号设置'],
+      text: '补全简历信息。',
+      avatar: true, modal: true,
+      truth: { captcha: false, requiresLogin: false, loggedIn: true, modals: 1, maskOnly: 1 },
+    },
+  };
+
+  const c = CASES[kase] || CASES['mentions-verify'];
+  document.getElementById('menu').innerHTML =
+    (c.menu || []).map(t => '<span>' + t + '</span>').join('');
+  document.getElementById('body-text').textContent = c.text || '';
+  if (c.heading) document.getElementById('heading').textContent = c.heading;
+  if (c.avatar) document.getElementById('avatar').hidden = false;
+  if (c.loginForm) document.getElementById('login-form').hidden = false;
+  if (c.captcha) document.getElementById('captcha').classList.add('on');
+  if (c.iframeCaptcha) document.getElementById('iframe-captcha').classList.add('on');
+  if (c.modal) {
+    document.getElementById('mask').classList.add('on');
+    document.getElementById('modal').classList.add('on');
+  }
+
+  window.fixtureTruth = () => Object.assign({ case: kase }, c.truth);
+})();
+</script>
+</html>
