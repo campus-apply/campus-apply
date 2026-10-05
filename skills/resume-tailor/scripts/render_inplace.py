@@ -39,6 +39,17 @@ def render(md_text, template_path, out_path):
     d = parse(md_text)
     doc = Document(template_path)
     P = list(doc.paragraphs)
+    # 排版方式先认一次：学校和学院发的模板基本是表格排版（整份简历装在一个表里），
+    # 下面整套逻辑建立在"板块标题是挂横线的段落"之上，对单元格无能为力。
+    # 这种情况要说清是排版方式不匹配，不是模板缺了某个段落——后者让人无从下手。
+    body_text = sum(len(p.text.strip()) for p in P)
+    table_text = sum(len(c.text.strip()) for t in doc.tables for r in t.rows for c in r.cells)
+    if table_text > body_text:
+        raise SystemExit(
+            '这份模板是表格排版（%d 个表格，正文主要在单元格里），原地改字只处理段落排版的简历。\n'
+            '两条路：① 换一份段落排版的基准简历；'
+            '② 用 docx_dump.py 看清这份模板的表格结构，在投递目录另写一个按单元格改字的 render.py。'
+            % len(doc.tables))
     titles = [i for i, p in enumerate(P) if has_drawing(p) and p.text.strip()]
     if len(titles) != len(d['sections']):
         raise SystemExit('板块数不一致：docx 标题 %s；resume.md 板块 %s' % ([P[i].text.strip() for i in titles], [s['title'] for s in d['sections']]))
