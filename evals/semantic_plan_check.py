@@ -191,13 +191,14 @@ def check_cases(driver, url, out, rows):
     case('控件身份对不上就不动它', '身份校验不通过' in r.stdout and company == '',
          '控件现值=' + repr(company))
 
-    # --- 旧格式仍然能用 ---
+    # --- 旧格式（selector + index）显式开关后仍然能用 ---
     plan_old = out / 'old.json'
-    plan_old.write_text(json.dumps({'fields': [
+    plan_old.write_text(json.dumps({'addressing': 'selector', 'fields': [
         dict(key='name', label='姓名', selector='#pname', kind='text', value='张某某'),
     ]}, ensure_ascii=False), encoding='utf-8')
     r = driver.marked('fill_old', 'fill', str(plan_old), check=False)
-    case('selector + index 的老计划仍然能跑', r.returncode == 0 and 'DONE' in r.stdout,
+    case('selector + index 的老计划加 addressing:selector 后仍然能跑',
+         r.returncode == 0 and 'DONE' in r.stdout,
          (r.stdout.strip().splitlines() or [''])[0])
 
     # --- survey 只读摸清整页 ---

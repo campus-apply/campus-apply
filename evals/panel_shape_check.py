@@ -303,7 +303,9 @@ def main(argv=None):
                 before = diagnose(case_dir, mark, 'diagnose_before', case)
 
                 plan = case_dir / 'plan.json'
-                plan.write_text(json.dumps({'fields': case['fields'], 'pace': {'min': .02, 'max': .05}},
+                plan.write_text(json.dumps({'fields': case['fields'],
+                                            'pace': {'min': .02, 'max': .05},
+                                            'addressing': 'selector'},
                                            ensure_ascii=False, indent=1), encoding='utf-8')
                 result = cdp(case_dir, 'fill', '--mark', mark, 'fill', str(plan), '--max', '40')
                 output = result.stdout + result.stderr

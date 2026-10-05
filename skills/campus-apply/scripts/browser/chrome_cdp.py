@@ -27,14 +27,15 @@
         从页面生成计划骨架：字段的语义坐标（板块 / 第几条 / 标签 / 同标签第几个）由代码从 DOM 读出来，
         每个字段的 value 留成 null，模型只填值，不用自己维护一张下标表。disabled 的字段不列入，
         敏感字段标注出来。--skip-ok 指向上一次的 fill 报告，标 filled 的字段这次不再列出（只补没填成的）。
-  chrome_cdp.py --mark <运行ID> fill <计划.json> [--max 秒]
+  chrome_cdp.py --mark <运行ID> fill <计划.json> [--max 秒] [--allow-selector]
         按计划把一整页字段连续填完，一次调用一份报告：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现
         → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不用为每个字段写脚本。
         计划 JSON：{"fields": [{...}], "pace": {"min":0.3,"max":0.8}, "panel_wait":2, "option_wait":2}
-        定位有两种写法，优先语义：**语义坐标** section / occurrence / label / nth（板块、第几条记录、
-        字段标签、同一条里同名标签的第几个——"年/月"或"起/止"共用标签时第四维不能省），由 plan-skeleton
-        生成；**selector + index** 仍然接受，用于骨架覆盖不到的场合。语义坐标加条目不失效、写错了只是
-        找不到，而 index 是纯位置量，错一位就操作到完全无关的控件。
+        定位默认用**语义坐标** section / occurrence / label / nth（板块、第几条记录、字段标签、同一条里
+        同名标签的第几个——"年/月"或"起/止"共用标签时第四维不能省），由 plan-skeleton 生成。
+        **selector + index 是降级路径，默认关闭**：要用得在计划里写 "addressing": "selector" 或者加
+        --allow-selector，否则退出非零。语义坐标加条目不失效、写错了只是找不到，而 index 是纯位置量，
+        错一位就操作到完全无关的控件，最敏感的字段往往恰好排在最前面。
         可选 expect_label：声明这个控件的可访问名称应当含什么，执行前校验，对不上就不动它。
         证件号、出生日期这类敏感字段一律跳过，除非该字段写了 sensitive_ok。
         每个 field：key / label（报告里显示）、selector（CSS）、index（同选择器第几个，默认 0）、
@@ -1017,7 +1018,13 @@ def _fill_one(tab, item, waits, learned=None):
     return True, record
 
 
-def cmd_fill(plan_path, max_seconds=120):
+def _uses_selector_addressing(item):
+    """这一条是不是走 selector + index。判据和执行时的分流保持一致：给了 selector 就按
+    selector 走，语义坐标也在也不改路——所以门禁要拦的就是"有 selector"这一个条件。"""
+    return bool(item.get('selector'))
+
+
+def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
     """按计划 JSON 在页内连续填完一页：开面板、按条件等、选中、收面板、三层回读，一次调用一份报告。
 
     计划里的字段名、选择器、目标值只当数据用，不拼进 JS 执行；元素由 lib_fill.js 按 handle 持有。
@@ -1050,6 +1057,21 @@ def cmd_fill(plan_path, max_seconds=120):
     if not all(isinstance(item, dict) for item in items):
         print('ERR_PLAN: fields 里每一项都要是对象')
         return 2
+    # 位置坐标默认不许用：index 写错一位就操作到完全无关的控件，而最敏感的字段往往恰好
+    # 排在最前面。要用得显式开——计划里写 "addressing": "selector"，或者命令行加
+    # --allow-selector。门禁只认"有没有 selector"，和执行时的分流判据是同一个条件。
+    if not (allow_selector or plan.get('addressing') == 'selector'):
+        offenders = [item.get('key') or item.get('label') or '(未命名)'
+                     for item in items if _uses_selector_addressing(item)]
+        if offenders:
+            print('ERR_PLAN: 这份计划用了位置坐标但没开开关。'
+                  f'共 {len(offenders)} 个字段给了 selector：'
+                  + '、'.join(str(k) for k in offenders[:8])
+                  + ('…' if len(offenders) > 8 else ''))
+            print('  默认只认语义坐标（section / occurrence / label / nth），由 plan-skeleton 生成。')
+            print('  骨架覆盖不到、确实要用 selector + index 时，在计划里加 "addressing": "selector"，'
+                  '或者命令行加 --allow-selector。')
+            return 2
     pace = plan.get('pace') if isinstance(plan.get('pace'), dict) else {}
     try:
         lo = float(pace.get('min', os.environ.get('PACE_MIN') or 0.3))
@@ -1739,7 +1761,7 @@ USAGE = {
     'screenshot': 'screenshot <输出.png>',
     'click': 'click <选择器|js:表达式|x,y>（一个参数）',
     'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
-    'fill': 'fill <计划.json> [--max 秒]',
+    'fill': 'fill <计划.json> [--max 秒] [--allow-selector]',
     'survey': 'survey <输出.json>',
     'plan-skeleton': 'plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]',
     'probe-options': 'probe-options <输出.json> [--only key1,key2]',
@@ -1833,7 +1855,7 @@ def main(argv):
         if len(rest) == 1:
             return cmd_stage(rest[0], libs, max_s)
     if cmd == 'fill' and args:
-        max_s, rest = 120, []
+        max_s, rest, allow_selector = 120, [], False
         i = 0
         while i < len(args):
             if args[i] == '--max':
@@ -1842,9 +1864,12 @@ def main(argv):
                     return 2
                 max_s = args[i + 1]; i += 2
                 continue
+            if args[i] == '--allow-selector':
+                allow_selector = True; i += 1
+                continue
             rest.append(args[i]); i += 1
         if len(rest) == 1:
-            return cmd_fill(rest[0], max_s)
+            return cmd_fill(rest[0], max_s, allow_selector)
     if cmd == 'survey' and len(args) == 1:
         return cmd_survey(args[0])
     if cmd == 'probe-options' and args:

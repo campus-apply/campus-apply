@@ -38,6 +38,7 @@ TARGET = dict(wish1='AI产品岗', dept=['技术线', '平台研发'], city='北
 EXPECTED_TRUTH = dict(TARGET, dept='技术线 / 平台研发')
 
 PLAN = {
+    'addressing': 'selector',          # fixture plans use selector + index by design
     'pace': {'min': 0.05, 'max': 0.12},
     'panel_wait': 2.0,
     'option_wait': 2.0,

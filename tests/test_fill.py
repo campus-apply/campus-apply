@@ -63,7 +63,7 @@ def test_fill_rejects_an_empty_field_list(tmp_path):
 def test_fill_accepts_a_bare_array_as_the_plan(tmp_path):
     """A list is shorthand for {"fields": [...]}; it must get past plan parsing."""
     plan = tmp_path / 'plan.json'
-    plan.write_text(json.dumps([{'key': 'a', 'selector': '#a', 'value': 'x'}]), encoding='utf-8')
+    plan.write_text(json.dumps([{'key': 'a', 'label': '姓名', 'value': 'x'}]), encoding='utf-8')
     r = run('fill', str(plan))
     assert 'ERR_PLAN' not in r.stdout
     assert 'ERR_NEED_TAB_MARK_OR_TAB_MATCH' in r.stdout
@@ -71,7 +71,7 @@ def test_fill_accepts_a_bare_array_as_the_plan(tmp_path):
 
 def test_fill_requires_a_claimed_tab(tmp_path):
     plan = tmp_path / 'plan.json'
-    plan.write_text(json.dumps({'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}]}),
+    plan.write_text(json.dumps({'fields': [{'key': 'a', 'label': '姓名', 'value': 'x'}]}),
                     encoding='utf-8')
     r = run('fill', str(plan))
     assert r.returncode == 2
@@ -80,7 +80,7 @@ def test_fill_requires_a_claimed_tab(tmp_path):
 
 def test_fill_rejects_a_nonpositive_or_infinite_max(tmp_path):
     plan = tmp_path / 'plan.json'
-    plan.write_text(json.dumps({'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}]}),
+    plan.write_text(json.dumps({'fields': [{'key': 'a', 'label': '姓名', 'value': 'x'}]}),
                     encoding='utf-8')
     for bad in ('0', '-5', 'inf', 'nan', 'soon'):
         r = run('fill', str(plan), '--max', bad)
@@ -90,7 +90,7 @@ def test_fill_rejects_a_nonpositive_or_infinite_max(tmp_path):
 
 def test_fill_reports_a_missing_max_value(tmp_path):
     plan = tmp_path / 'plan.json'
-    plan.write_text(json.dumps({'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}]}),
+    plan.write_text(json.dumps({'fields': [{'key': 'a', 'label': '姓名', 'value': 'x'}]}),
                     encoding='utf-8')
     r = run('fill', str(plan), '--max')
     assert r.returncode == 2
@@ -101,6 +101,50 @@ def test_fill_is_listed_in_the_help_text():
     r = run('--help')
     assert r.returncode == 0
     assert 'fill <计划.json>' in r.stdout
+
+
+def test_fill_rejects_selector_addressing_by_default(tmp_path):
+    """selector + index is disabled unless "addressing": "selector" or --allow-selector."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}]}),
+                    encoding='utf-8')
+    r = run('fill', str(plan))
+    assert r.returncode == 2
+    assert 'ERR_PLAN' in r.stdout
+    assert '位置坐标' in r.stdout or 'selector' in r.stdout
+
+
+def test_fill_allows_selector_with_flag(tmp_path):
+    """--allow-selector lets a selector-only plan pass the gate."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}]}),
+                    encoding='utf-8')
+    r = run('fill', str(plan), '--allow-selector')
+    assert 'ERR_PLAN' not in r.stdout
+    assert 'ERR_NEED_TAB_MARK_OR_TAB_MATCH' in r.stdout
+
+
+def test_fill_allows_selector_with_addressing_key(tmp_path):
+    """addressing: selector in the plan itself is equivalent to --allow-selector."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({
+        'addressing': 'selector',
+        'fields': [{'key': 'a', 'selector': '#a', 'value': 'x'}],
+    }), encoding='utf-8')
+    r = run('fill', str(plan))
+    assert 'ERR_PLAN' not in r.stdout
+    assert 'ERR_NEED_TAB_MARK_OR_TAB_MATCH' in r.stdout
+
+
+def test_fill_accepts_semantic_plan_without_flag(tmp_path):
+    """A plan with only semantic coordinates passes the gate without --allow-selector."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'fields': [
+        {'key': 'a', 'section': '基本信息', 'label': '姓名', 'value': 'x'},
+    ]}), encoding='utf-8')
+    r = run('fill', str(plan))
+    assert 'ERR_PLAN' not in r.stdout
+    assert 'ERR_NEED_TAB_MARK_OR_TAB_MATCH' in r.stdout
 
 
 def test_plan_values_are_passed_as_json_data_never_as_code():

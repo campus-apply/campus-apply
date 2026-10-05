@@ -144,7 +144,8 @@ def main(argv=None):
                 subprocess.run([sys.executable, str(CDP), 'open', base + '?run=' + mark, mark],
                                env=env, capture_output=True, text=True, timeout=60)
                 plan = case_dir / 'plan.json'
-                plan.write_text(json.dumps({'fields': fields, 'pace': {'min': .02, 'max': .05}},
+                plan.write_text(json.dumps({'fields': fields, 'pace': {'min': .02, 'max': .05},
+                                            'addressing': 'selector'},
                                            ensure_ascii=False, indent=1), encoding='utf-8')
                 result = subprocess.run(
                     [sys.executable, str(CDP), '--mark', mark, 'fill', str(plan), '--max', '30'],

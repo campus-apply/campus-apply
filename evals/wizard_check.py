@@ -39,6 +39,9 @@ STEP2 = [dict(key='org', label='单位名称', kind='text', selector='#org', val
          dict(key='role', label='担任职位', kind='text', selector='#role', value='虚构职位'),
          dict(key='agree', label='同意公开这段经历', kind='checkbox', selector='#agree', value=True)]
 
+# Fixture plans always use selector addressing by design; real agent plans use semantic coords.
+PLAN_OPTS = {'addressing': 'selector'}
+
 
 def browser_path():
     candidates = [os.environ.get('CA_BROWSER'),
@@ -130,8 +133,9 @@ def main(argv=None):
 
             def plan(name, fields):
                 path = out / (name + '.json')
-                path.write_text(json.dumps({'pace': {'min': .02, 'max': .05}, 'fields': fields},
-                                           ensure_ascii=False), encoding='utf-8')
+                payload = {'pace': {'min': .02, 'max': .05}, 'fields': fields}
+                payload.update(PLAN_OPTS)
+                path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
                 return str(path)
 
             for keep, label in (('1', '步骤二已挂载但 display:none'), ('0', '步骤二条件渲染，未挂载')):
