@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构网申表单：选项层与聚焦态测试台</title>
+<!--
+  本地测试用的虚构网申页，不连任何招聘站，字段值全是编的。
+
+  panel_shapes.html 测的是"面板找不找得到"，这一页测的是另外两件事——面板找到之后
+  "选项认不认得出"，以及"根本没有面板的时候会不会误认出一个"。两者都是 2026-10-05 在一个
+  真实站点上实测到的，各自让整页填写归零，而现有 fixture 一个都测不出来。
+  站名不写进 fixture（结论归站点笔记），只记结构和几何；class 名用公开组件库的形状。
+
+  形状 D — 选项节点不带任何 class 和 role（待处理 145）
+    真站的日期面板里，年份是 <div class="x-aside-item">2024</div>，月份是裸 <span>9月</span>
+    ——无 class、无 role。lib_fill.js 的 OPTION_SEL 是一张按 class/role 列举的清单
+    （[role=option]、li、[class*=option]、[class*=cascader-item]、td 等），实测
+    panel.querySelectorAll(OPTION_SEL).length === 0，两列一个都不命中。于是 optionsIn
+    返回空数组、option() 报 no-option，fill 如实报"第 1 级没有「2024」"——它确实什么都没看见。
+    这正是 PANEL_SEL 那层已经推翻过的错误（面板改成按点击前后差分找了，选项层没跟着改）。
+
+  形状 E — 一个面板里并排两级（同上）
+    这一页的日期面板不是"点了第一级才冒出第二级"的常规级联：年份列和月份格同时在同一个
+    浮层里并排。实测几何：面板 304×309，年份列 x 偏左 80×270，月份格 224×270。
+    cascader 的实现假设逐级点开逐级出现，所以第二级即使认出来了也无处可点。
+
+  形状 F — 点普通文本框被当成"开出了面板"（待处理 143）
+    真实鼠标点击一个输入框，框架必然给它的包装容器加聚焦态 class。实测抓到的唯一一条变化是
+    class 从 "x-input x-input-lg" 变成 "x-input x-input-lg x-input-focus"，那个包装 div
+    286×41、可见、够大。而 lib_fill.js 的 watchStart 为了认"本来就在 DOM 里、靠改样式显形"
+    的面板，监听 class/style/hidden/aria-hidden 并把属性变化的节点自身也收进候选，
+    于是这个包装 div 被当成"这次点击开出来的面板"。它不是面板，所以收不掉，后果两层：
+    probe-options 按设计停在第一个控件（整页下拉一个都没探到）；而且它永远 isConnected
+    且 visible，openedByUs 那本账永远销不掉——这一页只要点过一次文本框，之后每条命令都报
+    ERR_PANELS。纯文本框刻意排在第一个，复刻真站上的次序。
+
+  留给判卷的只读接口（驱动代码不许读）：
+    window.fixtureTruth()    页面内部记的真值
+    window.fixtureAudit()    每个面板开过几次、当前开着几个、聚焦态变过几次
+-->
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 24px; max-width: 900px; }
+  .row { margin: 18px 0; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  /* 包装容器：聚焦时加 x-input-focus，尺寸和真站量到的一致（286×41） */
+  .x-input { display: inline-block; width: 286px; height: 41px; border: 1px solid #ccc;
+             border-radius: 4px; box-sizing: border-box; }
+  .x-input-focus { border-color: #1677ff; box-shadow: 0 0 0 2px rgba(22,119,255,.1); }
+  .x-input > input { border: 0; outline: none; width: 100%; height: 100%;
+                     padding: 0 10px; box-sizing: border-box; font: inherit; }
+  /* 日期面板：304×309，年份列 80×270 在左，月份格 224×270 在右，两级并排 */
+  /* fixed 而不是 absolute：真站的日期浮层都是 fixed（挂在 body 下、脱离文档流），
+     而且这样页面滚动时面板不会跟着文档跑，点选项的坐标才算得准。 */
+  .x-date-panel { position: fixed; width: 304px; height: 309px; background: #fff;
+                  border: 1px solid #ddd; box-shadow: 0 6px 16px rgba(0,0,0,.12);
+                  display: none; z-index: 10; }
+  .x-date-panel.open { display: flex; }
+  /* 不内部滚动：容器内滚动是另一个形状，这一页只验选项认不认得出 */
+  .x-aside { width: 80px; height: 270px; border-right: 1px solid #eee; }
+  .x-aside-item { padding: 4px 8px; cursor: pointer; }
+  .x-aside-item:hover { background: #f5f5f5; }
+  .x-months { width: 224px; height: 270px; display: grid;
+              grid-template-columns: repeat(3, 1fr); align-content: start; }
+  .x-months > span { padding: 10px 4px; text-align: center; cursor: pointer; }
+  .x-months > span:hover { background: #f5f5f5; }
+</style>
+
+<h1>虚构网申表单（选项层与聚焦态）</h1>
+
+<!-- 形状 F：纯文本框排在第一个，点它会加聚焦态 class -->
+<div class="row">
+  <label for="name">姓名</label>
+  <span class="x-input" id="name-wrap"><input id="name" placeholder="请输入真实姓名" maxlength="100"></span>
+</div>
+
+<div class="row">
+  <label for="phone">手机号</label>
+  <span class="x-input" id="phone-wrap"><input id="phone" placeholder="请输入11位手机号码" maxlength="100"></span>
+</div>
+
+<!-- 形状 D + E：日期框，面板里两级并排、选项节点无 class 无 role -->
+<div class="row">
+  <label for="start">开始时间</label>
+  <span class="x-input" id="start-wrap"><input id="start" placeholder="请选择开始时间" readonly></span>
+  <div class="x-date-panel" id="start-panel">
+    <div class="x-aside" id="start-years"></div>
+    <div class="x-months" id="start-months"></div>
+  </div>
+</div>
+
+<div class="row">
+  <label for="end">结束时间</label>
+  <span class="x-input" id="end-wrap"><input id="end" placeholder="请选择结束时间" readonly></span>
+  <div class="x-date-panel" id="end-panel">
+    <div class="x-aside" id="end-years"></div>
+    <div class="x-months" id="end-months"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const truth = { name: '', phone: '', start: '', end: '' };
+  const audit = { opened: { start: 0, end: 0 }, focusClassChanges: 0,
+                  closedByOutsideClick: [] };
+
+  // 年份节点：div.x-aside-item，没有 role。月份节点：裸 span，连 class 都没有。
+  const YEARS = Array.from({ length: 9 }, (_, i) => String(2022 + i));  // 2022–2030，列高放得下
+  const MONTHS = Array.from({ length: 12 }, (_, i) => (i + 1) + '月');
+
+  for (const which of ['start', 'end']) {
+    const years = document.getElementById(which + '-years');
+    for (const y of YEARS) {
+      const d = document.createElement('div');
+      d.className = 'x-aside-item';            // 不命中 OPTION_SEL
+      d.textContent = y;
+      years.appendChild(d);
+    }
+    const months = document.getElementById(which + '-months');
+    for (const m of MONTHS) {
+      const s = document.createElement('span'); // 裸 span，无 class 无 role
+      s.textContent = m;
+      months.appendChild(s);
+    }
+  }
+
+  // 聚焦态：真实点击任何输入框都会让包装容器加 class，这是框架的常规行为。
+  for (const id of ['name', 'phone', 'start', 'end']) {
+    const input = document.getElementById(id);
+    const wrap = document.getElementById(id + '-wrap');
+    input.addEventListener('focus', () => {
+      wrap.classList.add('x-input-focus');
+      audit.focusClassChanges++;
+    });
+    input.addEventListener('blur', () => wrap.classList.remove('x-input-focus'));
+  }
+
+  // 文本框：值进真值表。没有任何面板。
+  for (const id of ['name', 'phone']) {
+    const input = document.getElementById(id);
+    input.addEventListener('input', () => { truth[id] = input.value; });
+  }
+
+  // 日期框：点一下开面板（面板本来就在 DOM 里，靠去掉 display:none 显形）。
+  // 选完年再选月才算填好，两级同时可见。
+  for (const which of ['start', 'end']) {
+    const input = document.getElementById(which);
+    const panel = document.getElementById(which + '-panel');
+    const wrap = document.getElementById(which + '-wrap');
+    let pickedYear = null;
+
+    input.addEventListener('mousedown', () => {
+      const r = wrap.getBoundingClientRect();
+      panel.style.left = r.left + 'px';          // fixed：视口坐标，不加 scrollX/Y
+      panel.style.top = (r.bottom + 2) + 'px';
+      panel.classList.add('open');
+      audit.opened[which]++;
+      pickedYear = null;
+    });
+
+    // 面板内部按下鼠标不往上冒，否则下面那条"点空白处收面板"会把自己收掉。
+    // 真实组件库都这么做（面板上 mousedown.stopPropagation），不这么做的话选第一级就关了。
+    panel.addEventListener('mousedown', e => e.stopPropagation());
+
+    panel.querySelector('.x-aside').addEventListener('click', e => {
+      if (!e.target.classList.contains('x-aside-item')) return;
+      pickedYear = e.target.textContent.trim();
+      for (const el of panel.querySelectorAll('.x-aside-item'))
+        el.style.background = el === e.target ? '#e6f4ff' : '';
+    });
+
+    panel.querySelector('.x-months').addEventListener('click', e => {
+      if (e.target.tagName !== 'SPAN') return;
+      if (!pickedYear) return;                 // 必须先选年：两级都要点到
+      const month = e.target.textContent.trim().replace('月', '');
+      const val = pickedYear + '-' + String(month).padStart(2, '0');
+      input.value = val;
+      truth[which] = val;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      panel.classList.remove('open');          // 选完收起来
+    });
+  }
+
+  // 点页面空白处收掉所有面板（常规脾气，这一页不考收面板的花样）
+  document.addEventListener('mousedown', e => {
+    if (e.target.closest('.x-date-panel') || e.target.closest('.x-input')) return;
+    const open = [...document.querySelectorAll('.x-date-panel.open')];
+    if (open.length) audit.closedByOutsideClick.push({
+      target: e.target.tagName + '.' + (e.target.className || '').toString().slice(0, 30),
+      x: Math.round(e.clientX), y: Math.round(e.clientY)});
+    for (const p of open) p.classList.remove('open');
+  });
+
+  window.fixtureTruth = () => JSON.parse(JSON.stringify(truth));
+  window.fixtureAudit = () => ({
+    opened: { ...audit.opened },
+    focusClassChanges: audit.focusClassChanges,
+    closedByOutsideClick: audit.closedByOutsideClick,
+    panelsOpenNow: document.querySelectorAll('.x-date-panel.open').length,
+  });
+})();
+</script>
+</html>

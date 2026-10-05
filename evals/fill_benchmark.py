@@ -39,6 +39,10 @@ EXPECTED_TRUTH = dict(TARGET, dept='技术线 / 平台研发')
 
 PLAN = {
     'addressing': 'selector',          # fixture plans use selector + index by design
+    # options_unverified: this measures how fast the two arms write the same values, not where
+    # the values came from. The source gate (panel fields must carry a probed options table)
+    # is what option_shapes_check covers; mixing the two would make this timing depend on it.
+    'options_unverified': True,
     'pace': {'min': 0.05, 'max': 0.12},
     'panel_wait': 2.0,
     'option_wait': 2.0,

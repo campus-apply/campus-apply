@@ -23,10 +23,12 @@
         逐个打开面板类控件、读回全部选项、收起来、验证已关，结论写进一个文件。**这条会动页面**
         （点开再收起），动手之前跟用户说一声；已经有值的字段自动跳过，不去碰它。
         十几个下拉逐个探是十几次往返，在页内连着做完只要几秒——省的是往返之间浏览器干等的时间。
-  chrome_cdp.py --mark <运行ID> plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]
+  chrome_cdp.py --mark <运行ID> plan-skeleton <输出.json> [--skip-ok <上次的报告.json>] [--from-options <探测报告.json>]
         从页面生成计划骨架：字段的语义坐标（板块 / 第几条 / 标签 / 同标签第几个）由代码从 DOM 读出来，
         每个字段的 value 留成 null，模型只填值，不用自己维护一张下标表。disabled 的字段不列入，
         敏感字段标注出来。--skip-ok 指向上一次的 fill 报告，标 filled 的字段这次不再列出（只补没填成的）。
+        --from-options 指向 probe-options 的报告：把探到的选项表塞进对应字段并校正 kind，
+        面板类字段的值就从"自由写一个字符串"变成"从这张表里挑"。fill 的前置校验认这个来源。
   chrome_cdp.py --mark <运行ID> fill <计划.json> [--max 秒] [--allow-selector]
         按计划把一整页字段连续填完，一次调用一份报告：解析选择器拿 handle → 开面板 → 按条件等面板和选项出现
         → 选中 → 收面板并验证已关 → 三层回读 → 下一个字段（字段间留 pace 间隔）。不用为每个字段写脚本。
@@ -38,6 +40,9 @@
         错一位就操作到完全无关的控件，最敏感的字段往往恰好排在最前面。
         可选 expect_label：声明这个控件的可访问名称应当含什么，执行前校验，对不上就不动它。
         证件号、出生日期这类敏感字段一律跳过，除非该字段写了 sensitive_ok。
+        面板类字段（dropdown / search / cascader / date）的值必须有来源：带 options 且值在表里，
+        否则**点开任何面板之前**就退出 2 并说明是来源问题（编出来的值填不进去，而报错看着像站点的毛病）。
+        可搜索下拉这类"打字才出选项"的，给该字段或整份计划加 options_unverified: true 绕过。
         每个 field：key / label（报告里显示）、selector（CSS）、index（同选择器第几个，默认 0）、
         kind 取 text|dropdown|search|cascader|date|checkbox|native-select、value（级联是数组，逐级点）、
         可选 term（可搜索下拉先打的词）、display_selector（值显示在别处时指明）、max（文本字数上限）、display（级联回读用的显示值）。
@@ -762,19 +767,23 @@ def _wait_for(tab, expr, want, budget):
         time.sleep(0.03)
 
 
-def _panel_for(tab, handle, budget):
+def _panel_for(tab, handle, budget, note=True):
     """找这次点击开出来的面板：取点击之后新出现的节点，按"更像面板"排序取第一个。
 
     不按 class 全局列举，也不用几何淘汰。两个真实站点给过两种相反的死法：一个站的真面板
     被同样命中选择器的祖先容器吞掉，另一个站的面板盖在输入框上、被"必须紧贴若干像素"的
     配对规则扔掉。面板是点出来的，所以"这一轮新出现"才是它的本质特征，几何只用于排序。
+
+    note=False 时只看不记账：级联的第 2 级要先问一句"有没有新面板"，而这一问不该在账本上
+    留痕——答案是"没有"的时候，记进去的那个候选（选中态变色的选项格子之类）再也销不掉。
     """
     expr = 'window.__caFill.appeared(%d)' % handle
     ok, found = _wait_for(tab, expr, lambda v: bool(v), budget)
     if not ok or not found:
         return None
     panel = found[0]
-    _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
+    if note:
+        _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
     return panel
 
 
@@ -864,11 +873,15 @@ def _click_section_title(tab, handle):
 
 
 def _real_click(tab, handle):
-    """发真实鼠标事件点一个 handle：执行前重新校验几何与遮挡，必要时先滚进视口。"""
+    """发真实鼠标事件点一个 handle：执行前重新校验几何与遮挡，必要时先滚进视口。
+
+    校验和点击之间有一个空窗：aim 在页内算完坐标返回，点击是另一条 CDP 命令。这期间页面
+    还可能在动（滚动没停、面板重新定位），于是点在了校验时并不在那里的东西上。所以滚动之后
+    要再 aim 一次，而且这一次的结果立刻用掉，不留二次等待。
+    """
     aim = _fill_call(tab, f'window.__caFill.aim({handle})')
     if aim and not aim['ok'] and aim.get('why') in ('offscreen', 'covered'):
         _fill_call(tab, f'window.__caFill.scrollTo({handle})')
-        time.sleep(0.05)
         aim = _fill_call(tab, f'window.__caFill.aim({handle})')
     if not aim or not aim['ok']:
         raise TabError('点不了：' + (aim or {}).get('why', '未知') + (
@@ -1026,10 +1039,21 @@ def _fill_one(tab, item, waits, learned=None):
                     _close_panels(tab, handle, waits['panel'], learned)
                     return False, record
                 _real_click(tab, got['handle'])
-                # 级联的下一级可能新开一个面板，也可能就在当前面板里追加一列。
-                # 取不到新节点不是失败，继续用当前这个。
+                # 级联的下一级可能新开一个面板（省级菜单换成市级），也可能就在当前面板里
+                # 并排着（年份一列、月份一格，两级同时在）。所以"点完之后出现了新节点"不足以
+                # 换面板——选中态变色也会让节点出现在候选里，换过去就等于把搜索范围缩到一个
+                # 格子里，第 2 级怎么找都找不到（实测报"第 2 级没有「9月」"且面板里一个选项都列不出）。
+                # 判据改成：新面板必须真的含有下一级要点的那一项，否则继续用当前这个。
                 if depth + 1 < len(steps):
-                    panel = _panel_for(tab, handle, waits['panel']) or panel
+                    nxt = _panel_for(tab, handle, waits['panel'], note=False)
+                    if nxt:
+                        probe = _fill_call(
+                            tab, 'window.__caFill.option(%d, %s, true)'
+                            % (nxt['handle'], json.dumps(steps[depth + 1])))
+                        if probe and probe.get('handle'):
+                            panel = nxt
+                            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)'
+                                       % (handle, panel['handle']))
             how, closed = _close_panels(tab, handle, waits['panel'], learned)
             record['closed_by'] = how
             if not closed:
@@ -1107,6 +1131,42 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
             print('  骨架覆盖不到、确实要用 selector + index 时，在计划里加 "addressing": "selector"，'
                   '或者命令行加 --allow-selector。')
             return 2
+    # 面板类字段的值必须有来源。探测一失败，模型就会退回"按常识编一个"——真站上实测编出过
+    # "2024-09"，而那个面板里只有"2024"和"9月"两列。坏处不只是填不进去：报出来的是
+    # "面板里没有这一项"，读着像站点的问题，而真问题是这个值根本没来源。所以在**点开任何
+    # 面板之前**就拦下来，说清是来源问题。有来源 = 这个字段带了 options（由
+    # plan-skeleton --from-options 塞进来）且值在表里，或者整份计划写了 options_unverified。
+    if not plan.get('options_unverified'):
+        groundless = []
+        for item in items:
+            if item.get('kind') not in ('dropdown', 'search', 'cascader', 'date'):
+                continue
+            if item.get('options_unverified'):
+                continue
+            options = item.get('options')
+            if not options:
+                groundless.append((item.get('key') or item.get('label') or '(未命名)',
+                                   '没带选项表'))
+                continue
+            want = item.get('value')
+            steps = want if isinstance(want, list) else [want]
+            missing = [s for s in steps if s is not None and s not in options]
+            if missing:
+                groundless.append((item.get('key') or item.get('label') or '(未命名)',
+                                   '值不在选项表里：' + '、'.join(str(m) for m in missing[:3])))
+        if groundless:
+            print(f'ERR_PLAN: {len(groundless)} 个面板类字段的值没有来源，一个都还没动页面：')
+            for key, why in groundless[:8]:
+                print(f'  {key}  {why}')
+            if len(groundless) > 8:
+                print(f'  …另外 {len(groundless) - 8} 个')
+            print('  先跑 probe-options 把选项读回来，再用 '
+                  'plan-skeleton --from-options <探测报告> 出骨架，值从选项表里挑。')
+            print('  探测跑不通就先修探测或问用户，不要凭印象写——编出来的值填不进去，'
+                  '而报错看着像站点的问题。')
+            print('  确实要绕过（比如可搜索下拉的选项要打字才出来）：'
+                  '给那个字段加 "options_unverified": true，或整份计划加同名开关。')
+            return 2
     pace = plan.get('pace') if isinstance(plan.get('pace'), dict) else {}
     try:
         lo = float(pace.get('min', os.environ.get('PACE_MIN') or 0.3))
@@ -1181,7 +1241,7 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
     return _with_claimed_tab(go, deadline)
 
 
-def cmd_plan_skeleton(out_path, skip_ok=None):
+def cmd_plan_skeleton(out_path, skip_ok=None, from_options=None):
     """从当前页面生成一份计划骨架：字段的语义坐标由代码从 DOM 读出来，模型只往 value 里填值。
 
     为什么不让模型自己写坐标：整页一百多个字段时，模型要先抄一遍控件下标、写计划时再按
@@ -1190,6 +1250,12 @@ def cmd_plan_skeleton(out_path, skip_ok=None):
 
     skip_ok 指向上一次的 fill 报告，里面标 filled 的字段这次不再列出——只补没填成的那些，
     不必为了几个失败字段把整页长文本重写一遍。
+
+    from_options 指向 probe-options 的报告：把探到的选项表塞进对应字段，面板类字段的 value
+    就从"自由写一个字符串"变成"从这张表里挑一个"。探测失败时模型会很自然地按常识编一个值
+    （真站上实测编出过"2024-09"，而面板里只有"2024"和"9月"），失败信息读起来像站点的问题，
+    而真问题是这个值没有来源。有来源的字段在计划里带上 options 和 options_from，
+    fill 的前置校验认这两个。
     """
     done = set()
     if skip_ok:
@@ -1202,6 +1268,21 @@ def cmd_plan_skeleton(out_path, skip_ok=None):
         for r in (prior.get('fields') or []):
             if r.get('status') == 'filled':
                 done.add(r.get('key'))
+
+    probed, probed_at = {}, None
+    if from_options:
+        try:
+            with open(from_options, encoding='utf-8') as f:
+                report = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f'ERR_PLAN: 读不出探测报告：{e}')
+            return 2
+        probed_at = report.get('url') or from_options
+        for r in (report.get('fields') or []):
+            if r.get('options'):
+                probed[r.get('key')] = dict(options=r['options'],
+                                            kind=r.get('kind'),
+                                            revealed=r.get('revealed') or [])
 
     def go(tab):
         with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
@@ -1230,8 +1311,17 @@ def cmd_plan_skeleton(out_path, skip_ok=None):
                 item['max'] = limit
             if f['sensitive']:
                 item['note'] = '敏感字段，默认不写；确需填写要加 sensitive_ok 并经用户确认'
+            hit = probed.get(key)
+            if hit:
+                # 探过的字段：带上选项表和来源。kind 也按探测结果校正——探到选项说明它是
+                # 面板类控件，骨架按 DOM 属性猜的 text 是错的。
+                item['kind'] = hit['kind'] or item['kind']
+                item['options'] = hit['options']
+                item['options_from'] = probed_at
             fields.append(item)
         plan = dict(source=outline['url'], fields=fields)
+        if from_options:
+            plan['options_probed_at'] = probed_at
         try:
             with open(out_path, 'w', encoding='utf-8') as fh:
                 json.dump(plan, fh, ensure_ascii=False, indent=1)
@@ -1244,11 +1334,16 @@ def cmd_plan_skeleton(out_path, skip_ok=None):
         for section, n in by_section.items():
             print(f'{section or "（无标题板块）"}\t{n} 个字段')
         print('---')
+        with_options = sum(1 for f in fields if f.get('options'))
         print(f'SKELETON {len(fields)} 个字段待填'
               + (f'，跳过上轮已成的 {skipped} 个' if skipped else '')
+              + (f'，其中 {with_options} 个带回了探到的选项表' if with_options else '')
               + f' → {out_path}')
         print('每个字段的 value 现在是 null，填上值再交给 fill；kind 按实际控件改'
               '（dropdown / search / cascader / date）')
+        if from_options and not with_options:
+            print('注意：探测报告里一个选项都没有，面板类字段的值仍然没有来源——'
+                  '先把 probe-options 跑通，不要凭印象写')
         return 0
 
     return _with_claimed_tab(go)
@@ -1438,6 +1533,9 @@ def cmd_probe_options(out_path, only=None):
                                 note='点了没出现面板，多半是普通文本框'))
                 continue
             opts = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % panel['handle']) or []
+            # 面板里并排几组选项：两组以上是多级控件（年份一列 + 月份一格），计划要写 cascader。
+            # 按结构数，不按 class 猜——猜错了 kind，计划走的就是另一条执行路径。
+            groups = _fill_call(tab, 'window.__caFill.optionGroups(%d)' % panel['handle']) or 0
             # 选一个值看页面会不会多出字段：有的字段是选了某项才出现的（选了语言才出现
             # 考试和分数），不在这里触发出来，它们在整页计划里就是缺的，填完一轮才发现。
             revealed = []
@@ -1462,7 +1560,9 @@ def cmd_probe_options(out_path, only=None):
             if how in CLOSE_TRICKS:
                 learned = how
             out.append(dict(key=key, label=f['label'],
-                            kind='search' if f['maxlength'] else 'dropdown',
+                            kind=('cascader' if groups >= 2
+                                  else 'search' if f['maxlength'] else 'dropdown'),
+                            option_groups=groups,
                             options=opts[:200], count=len(opts),
                             probed_with=opts[0] if revealed else None,
                             revealed=revealed,
@@ -1859,7 +1959,7 @@ USAGE = {
     'stage': 'stage <stage.js> [--libs a.js b.js] [--max 秒]',
     'fill': 'fill <计划.json> [--max 秒] [--allow-selector]',
     'survey': 'survey <输出.json>',
-    'plan-skeleton': 'plan-skeleton <输出.json> [--skip-ok <上次的报告.json>]',
+    'plan-skeleton': 'plan-skeleton <输出.json> [--skip-ok <上次的报告.json>] [--from-options <探测报告.json>]',
     'probe-options': 'probe-options <输出.json> [--only key1,key2]',
     'read-urls': 'read-urls <列表文件> <输出目录> [起始行] [结束行]',
     'sniff': 'sniff <选择器|js:表达式|x,y>（一个参数）[--wait 秒]',
@@ -2017,18 +2117,23 @@ def main(argv):
         if len(rest) == 1:
             return cmd_probe_options(rest[0], only)
     if cmd == 'plan-skeleton' and args:
-        skip_ok, rest = None, []
+        skip_ok, from_options, rest = None, None, []
         i = 0
         while i < len(args):
-            if args[i] == '--skip-ok':
+            if args[i] in ('--skip-ok', '--from-options'):
+                flag = args[i]
                 if i + 1 >= len(args):
-                    print('ERR_USAGE plan-skeleton: --skip-ok 缺少文件名')
+                    print(f'ERR_USAGE plan-skeleton: {flag} 缺少文件名')
                     return 2
-                skip_ok = args[i + 1]; i += 2
+                if flag == '--skip-ok':
+                    skip_ok = args[i + 1]
+                else:
+                    from_options = args[i + 1]
+                i += 2
                 continue
             rest.append(args[i]); i += 1
         if len(rest) == 1:
-            return cmd_plan_skeleton(rest[0], skip_ok)
+            return cmd_plan_skeleton(rest[0], skip_ok, from_options)
     if cmd == 'read-urls' and 2 <= len(args) <= 4:
         return cmd_read_urls(*args)
     if cmd == 'launch' and len(args) <= 1:

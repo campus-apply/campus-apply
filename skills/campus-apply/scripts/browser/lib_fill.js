@@ -60,7 +60,11 @@
     + '[class*="dropdown"],[class*="Dropdown"],[class*="select-panel"],[class*="picker"],'
     + '[class*="Picker"],[class*="cascader"],[class*="Cascader"],[class*="calendar"],'
     + '[class*="Calendar"],[class*="menus"],[class*="popper"],[class*="popover"],[class*="panel"]';
-  const OPTION_SEL = '[role="option"],[role="menuitem"],[role="treeitem"],li,'
+  // 选项也不按 class 列举，同一个道理。真站上见过的选项节点：div 带自家 class（不含
+  // "option" 这类词）、裸 span 连 class 都没有——实测按 class/role 列举时命中 0 个，
+  // 于是"面板里没有这一项"，而面板里明明写着那几个字。选项的本质是"面板里能点的叶子"：
+  // 没有子元素、有可见文本、够大。下面这个选择器和 PANEL_HINT 一样只用来排序，**不淘汰**。
+  const OPTION_HINT = '[role="option"],[role="menuitem"],[role="treeitem"],li,'
     + '[class*="select-item"],[class*="option"],[class*="Option"],[class*="menu-item"],'
     + '[class*="cascader-item"],td[class*="cell"],td';
 
@@ -68,6 +72,24 @@
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height,
              cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
+  };
+
+  // 面板里能点的叶子，按"更像选项"排序。判据是结构而不是 class：没有子元素（文字直接挂在
+  // 它身上）、有可见文本、够大。一个面板里并排两级（年份一列、月份一格，两级同时在）也
+  // 照样全收进来——逐级点开和并排两级的区别交给调用方，这里只负责"这个面板里有哪些能点的"。
+  const optionLeaves = panel => {
+    const out = [];
+    for (const el of panel.querySelectorAll('*')) {
+      if (el.children.length) continue;                  // 只要叶子
+      if (!clean(el.textContent)) continue;              // 要有文字
+      if (!visible(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;         // 比面板判据松：选项格子可以很小
+      out.push(el);
+    }
+    // 命中 OPTION_HINT 的排前面：有的面板里混着标题、箭头、"清空"这类叶子，
+    // 真选项通常带得上那套词；但不命中也留着，否则就又回到按 class 列举了。
+    return out.sort((a, b) => (b.matches(OPTION_HINT) ? 1 : 0) - (a.matches(OPTION_HINT) ? 1 : 0));
   };
 
   // 写错一个下标就会操作到完全无关的控件，而这几类字段恰好排在表单最前面（索引 0 附近）。
@@ -88,16 +110,31 @@
 
   // 点击前后的变化观察。面板有两种出法：新插一个节点（挂 body 或 portal 下），
   // 或者本来就在 DOM 里、靠改样式显形。两种都要认，所以既看新增节点也看属性变化。
-  let watcher = null, appeared = new Set();
+  //
+  // 但"属性变过"不等于"显形"：真实鼠标点一个输入框，框架必然给它的包装容器加个聚焦态
+  // class（实测过 x-input → x-input x-input-focus，那个容器 286×41、本来就可见）。
+  // 把它当成面板的后果是整页归零——它不是面板所以永远收不掉，而且脏账留在 openedByUs 里，
+  // 之后每条命令都报 ERR_PANELS。所以属性变化的节点要再过一道：**点击前不可见、现在可见**
+  // 才算显形。
+  //
+  // 判"点击前"不能在回调里读 visible()——回调跑的时候属性已经改完了，读到的是变化之后的
+  // 状态（第一版就栽在这里：display:none → flex 的面板被判成"本来就可见"，于是整个显形
+  // 这条路断掉）。所以开始观察时先把全页可见性记一份快照，那才是点击前的事实。
+  let watcher = null, appeared = new Set(), attrTouched = new Set(), wasVisible = new WeakSet();
   const watchStart = () => {
     watchStop();
     appeared = new Set();
+    attrTouched = new Set();
+    wasVisible = new WeakSet();
+    // 点击前的可见性快照。只记可见的那些（WeakSet 不留引用，不拖累 GC）；
+    // 没记进来的要么当时不可见，要么是点击之后才进 DOM 的，两种都该算"新出现"。
+    for (const el of document.querySelectorAll('*')) if (visible(el)) wasVisible.add(el);
     watcher = new MutationObserver(records => {
       for (const rec of records) {
         for (const node of rec.addedNodes)
           if (node.nodeType === 1) appeared.add(node);
-        // 本来就在 DOM 里、改 class 或 style 显形的（常见于把 display:none 去掉）
-        if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+        if (rec.type === 'attributes' && rec.target.nodeType === 1)
+          attrTouched.add(rec.target);
       }
     });
     watcher.observe(document.documentElement, {
@@ -108,13 +145,16 @@
   const watchStop = () => {
     if (watcher) { watcher.takeRecords(); watcher.disconnect(); watcher = null; }
   };
-  // 取走这一轮新出现、且现在可见、够大的节点。同一棵树里只留最外层那个——这里按
-  // "谁是谁的祖先"去重是安全的，因为两个都是这一轮新出现的，不会误伤常驻容器。
+  // 取走这一轮真正新出现、且现在可见、够大的节点。新插进来的节点一律算；靠改属性的那些，
+  // 只有"点击前不可见、现在可见"才算显形——否则聚焦高亮、选中态变色这类日常变化都会被
+  // 当成面板。同一棵树里只留最外层那个：两个都是这一轮新出现的，按血缘去重不会误伤常驻容器。
   const watchTake = () => {
     if (watcher) watcher.takeRecords().forEach(rec => {
       for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
-      if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+      if (rec.type === 'attributes' && rec.target.nodeType === 1) attrTouched.add(rec.target);
     });
+    // 改属性显形的：点击前那份快照里不可见、现在可见
+    for (const el of attrTouched) if (!wasVisible.has(el)) appeared.add(el);
     const fresh = [...appeared].filter(el => el.isConnected && visible(el));
     const out = [];
     for (const el of fresh) {
@@ -303,7 +343,10 @@
     scrollTo(handle) {
       const el = get(handle);
       if (!el) return false;
-      el.scrollIntoView({ block: 'center', inline: 'center' });
+      // instant 而不是默认的平滑滚动：平滑滚动要好几帧才停，而调用方紧接着就要 aim 一次、
+      // 再把坐标交给浏览器去点。滚动还在走的时候，aim 校验过的坐标到点击那一刻已经过期，
+      // 于是点在了面板外面——真实的表现是"面板刚开就被自己点没了"，很难查。
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       return true;
     },
 
@@ -360,11 +403,16 @@
     appeared(anchorHandle) {
       const anchor = anchorHandle ? get(anchorHandle) : null;
       const box = anchor ? rectOf(anchor) : null;
-      const scored = watchTake().map(el => {
+      // 第二道防线，独立于"显形"那条判据：候选如果就是被点控件自己（或它的包装容器、或
+      // 它身上的某个后代），一律不是面板。面板是另开一层给你选东西的，不会是控件自身那棵树。
+      // 只靠显形判据也能挡住聚焦高亮，但组件库的花样太多（选中态、校验态、展开箭头转向），
+      // 这一条按血缘拦，和具体是什么样式变化无关。
+      const ownTree = el => anchor && (el.contains(anchor) || anchor.contains(el));
+      const scored = watchTake().filter(el => !ownTree(el)).map(el => {
         const r = rectOf(el);
         let score = 0;
         if (el.matches(PANEL_HINT)) score += 4;                  // 像面板的词
-        if (el.querySelector(OPTION_SEL)) score += 3;            // 里面有能点的选项
+        if (optionLeaves(el).length >= 2) score += 3;             // 里面有好几个能点的叶子
         const pos = getComputedStyle(el).position;
         if (pos === 'fixed' || pos === 'absolute') score += 2;   // 浮层多半脱离文档流
         if (box) {
@@ -381,9 +429,15 @@
     },
 
     // 记下"这个字段开出来的面板是它"，以及收掉之后销账。
+    // 记下"这个字段开出来的面板是它"，以及收掉之后销账。记之前再过一遍血缘：控件自己那棵树
+    // 不是面板。一次误判进了这本账就再也销不掉（控件自身永远 isConnected 且 visible），
+    // 从此这一页每条命令都报 ERR_PANELS——所以这里宁可不记，也不能记错。
     noteOpen(fieldHandle, panelHandle) {
       const panel = get(panelHandle);
-      if (panel) openedByUs.set(fieldHandle, panel);
+      const field = get(fieldHandle);
+      if (!panel) return false;
+      if (field && (panel.contains(field) || field.contains(panel))) return false;
+      openedByUs.set(fieldHandle, panel);
       return true;
     },
     noteClosed(fieldHandle) { openedByUs.delete(fieldHandle); return true; },
@@ -405,13 +459,30 @@
       const panel = get(panelHandle);
       if (!panel) return [];
       const seen = [];
-      for (const el of panel.querySelectorAll(OPTION_SEL)) {
-        if (!visible(el)) continue;
-        if (el.querySelector(OPTION_SEL)) continue;          // 只要叶子节点
+      for (const el of optionLeaves(panel)) {
         const text = clean(el.innerText);
         if (text && !seen.includes(text)) seen.push(text);
       }
       return seen;
+    },
+
+    // 这个面板里的选项分成几组并排的容器。两组以上说明是多级控件，而且两级同时在一个面板里
+    // （年份一列、月份一格），不是"点了第一级才冒出第二级"的常规级联——这两种要分开对待，
+    // 而计划里的 kind 该写 cascader 还是 dropdown 就看这个数。判据是结构，不是 class。
+    optionGroups(panelHandle) {
+      const panel = get(panelHandle);
+      if (!panel) return 0;
+      const groups = new Set();
+      for (const el of optionLeaves(panel)) {
+        // 往上找到 panel 的直接子节点那一层：同一组选项共享同一个这样的祖先
+        let node = el;
+        while (node.parentElement && node.parentElement !== panel) node = node.parentElement;
+        if (node !== panel) groups.add(node);
+      }
+      // 只有一个叶子的组不算一级（箭头、标题这类）
+      let real = 0;
+      for (const g of groups) if (optionLeaves(g).length >= 2) real++;
+      return real;
     },
 
     // 在某个面板里按文本找选项。exact 为真要求完全相等（菜单没过滤完时，"唯一项"往往不是目标值）。
@@ -420,16 +491,12 @@
       if (!panel) return { error: 'panel-gone' };
       const want = clean(text);
       const hits = [];
-      for (const el of panel.querySelectorAll(OPTION_SEL)) {
-        if (!visible(el)) continue;
-        if (el.querySelector(OPTION_SEL)) continue;          // 只要叶子节点
+      for (const el of optionLeaves(panel)) {
         const label = clean(el.innerText);
         if (exact ? label === want : label.includes(want)) hits.push({ el, label });
       }
       if (!hits.length) {
-        const all = [...panel.querySelectorAll(OPTION_SEL)].filter(visible)
-          .filter(e => !e.querySelector(OPTION_SEL)).map(e => clean(e.innerText))
-          .filter(Boolean).slice(0, 40);
+        const all = optionLeaves(panel).map(e => clean(e.innerText)).filter(Boolean).slice(0, 40);
         return { error: 'no-option', available: all };
       }
       return { handle: register(hits[0].el), label: hits[0].label, count: hits.length };
@@ -526,6 +593,10 @@
             wrap = wrap.parentElement;
           }
         }
+        // 还是没有显示值元素：这个控件的值就写在它自己身上。日期框和一部分下拉是这样的
+        // （点出来一个面板选，但选中的值回填进 input.value，页面上没有单独的显示节点）。
+        // 不回落的话这类字段永远回读不过——而值明明已经填对了，报出来却是"显示值读到 None"。
+        if (display === null && typeof dom === 'string' && dom !== '') display = dom;
       }
       return { dom, display, model: api.modelValue(handle) };
     },

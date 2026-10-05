@@ -144,8 +144,13 @@ def main(argv=None):
                 subprocess.run([sys.executable, str(CDP), 'open', base + '?run=' + mark, mark],
                                env=env, capture_output=True, text=True, timeout=60)
                 plan = case_dir / 'plan.json'
+                # options_unverified：这一套要的就是"值不在面板里"那条执行期失败路径。
+                # 前置的来源校验（没来源就不动页面）会在点开面板之前拦住，于是这条路测不到——
+                # 但它在真实世界仍然会发生：探测报告是上一轮的、页面选项换了。两道防线都要有，
+                # 也都要测，所以这里显式绕过前置那道。
                 plan.write_text(json.dumps({'fields': fields, 'pace': {'min': .02, 'max': .05},
-                                            'addressing': 'selector'},
+                                            'addressing': 'selector',
+                                            'options_unverified': True},
                                            ensure_ascii=False, indent=1), encoding='utf-8')
                 result = subprocess.run(
                     [sys.executable, str(CDP), '--mark', mark, 'fill', str(plan), '--max', '30'],
