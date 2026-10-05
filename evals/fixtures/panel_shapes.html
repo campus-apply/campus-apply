@@ -26,15 +26,24 @@
            甲站"再点一次输入框" 10/10 有效、"点字段标题" 10 次全部无效；
            乙站正好反过来，"点板块标题"有效、"再点一次输入框"无效。
            两个控件各模拟一种脾气，面板都紧贴输入框下方 2px（配得上，考的只是收面板）。
+  形状 D — 选项延迟到位：面板壳点击后同步插入 DOM，里面是空的；delay 毫秒之后选项才渲染进去。
+           真站（百度招聘在线简历）实测：年份选项是 div.x-aside-item，月份是裸 span 连 class 都没有，
+           按 class/role 列举命中 0 个。本组的选项照这个 markup 做，所以它同时考两件事：
+             1. 等待逻辑能不能熬到选项到位（#146 的原始诊断）
+             2. optionLeaves 的结构判据能不能认出不带 class 的选项（lib_fill.js:80）
+           壳和选项分两个时点到位，是真站上"面板开着、却报没出现候选"的最小复现尝试。
+           注意：本组的判据是"应该怎样"——选项到位后必须探到并选中。
 
   查询参数：
-    ?shape=a|b|c|close|all   只渲染哪一组，不给就全渲染（all）
+    ?shape=a|b|c|close|d|all 只渲染哪一组，不给就全渲染（all）
     ?fillers=<个数>          形状 C 的常驻假容器个数，默认 77（实测值）
+    ?delay=<毫秒>            形状 D 的选项渲染延迟，默认 300；eval 跑 300 和 750 两档
 
   给测试用的接口（都是只读的，页面自己不调）：
     window.fixtureTruth()   —— 真值，每个控件页面内部实际存着什么
     window.fixtureAudit()   —— 行为审计：面板开着几个、假容器几个、每种收面板的办法各被试了
-                               几次（哪招有效就看哪招之后面板数归零）、提交点了没
+                               几次（哪招有效就看哪招之后面板数归零）、提交点了没、
+                               形状 D 的选项渲染进去了几次（optionsRendered）和用的延迟（slowDelay）
 -->
 <style>
 body{font:16px/1.7 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222}
@@ -67,6 +76,19 @@ button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;bac
   list-style:none;margin:0;padding:4px 0}
 .sd-Menu-content-item,.ant-select-dropdown-menu-item,.ant-calendar-date-item{padding:6px 14px;cursor:pointer}
 .sd-Menu-content-item:hover,.ant-select-dropdown-menu-item:hover,.ant-calendar-date-item:hover{background:#f0f6ff}
+
+/* 形状 D：延迟渲染的面板。壳挂 body 下、紧贴输入框下方 2px（位置本身配得上，考的只是时序）。 */
+.x-aside-panel{box-sizing:border-box;position:absolute;z-index:60;background:#fff;
+  border:1px solid #bbb;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.12);
+  width:240px;min-height:60px;max-height:220px;overflow:auto;padding:4px 0}
+/* 真站的两种选项 markup：带自家 class 的 div、和连 class 都没有的裸 span。
+   两种都给足内边距，确保盒子 >= 8x8 —— 否则 optionLeaves 的尺寸门槛会筛掉它们，
+   测出来的"探不到"就成了 fixture 的锅。 */
+.x-aside-item,.x-aside-panel span{display:block;padding:6px 14px;cursor:pointer;min-height:20px}
+.x-aside-item:hover,.x-aside-panel span:hover{background:#f0f6ff}
+/* 空壳状态：选项还没到的那段时间，壳本身必须可见且够大（> 20x10），
+   这样它才会被 watchTake() 收成候选 —— 这正是"壳在、选项不在"要测的状态。 */
+.x-aside-panel:empty{min-height:60px}
 </style>
 
 <h1>虚构网申表单：面板形状测试台</h1>
@@ -124,6 +146,26 @@ button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;bac
   </div>
 </section>
 
+<section class="ps-group" data-group="d">
+  <h2 class="ps-section-title">形状 D：面板壳先到，选项延迟才渲染进去</h2>
+  <!-- 点击后同步插入空壳（挂 body 下、紧贴输入框下方 2px，位置配得上），
+       delay 毫秒后才把选项插进壳里。选项用真站实测的 markup：一个带自家 class 的 div 列，
+       一个连 class 都没有的裸 span 列 —— 按 class 列举都命中不了，只有结构判据认得出。
+       判据是"应该怎样"：等待逻辑必须熬到选项到位，并且能正确选中。 -->
+  <div class="ps-field" data-shape="d">
+    <label class="ps-field-title">最高学历</label>
+    <input class="ps-input" id="ps-d-degree" data-ps-input="d-degree" data-display="d-degree"
+           readonly placeholder="请选择">
+    <p class="ps-note">壳立刻出现（里面是空的），选项延迟到位。</p>
+  </div>
+  <div class="ps-field" data-shape="d">
+    <label class="ps-field-title">毕业年份</label>
+    <input class="ps-input" id="ps-d-year" data-ps-input="d-year" data-display="d-year"
+           readonly placeholder="请选择">
+    <p class="ps-note">选项是裸 span，没有 class，也延迟到位。</p>
+  </div>
+</section>
+
 <section class="ps-group" data-group="c">
   <h2 class="ps-section-title">形状 C：常驻假容器噪音</h2>
   <!-- 这一组只有一个普通文本框是要填的，一个面板都不会开。下面那一堆容器是噪音：
@@ -146,6 +188,8 @@ button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;bac
 const params = new URL(location.href).searchParams;
 const shape = (params.get('shape') || 'all').toLowerCase();
 const fillerCount = Math.max(0, Math.min(500, Number(params.get('fillers') || 77) | 0));
+// 形状 D 的选项渲染延迟。eval 跑 300 和 750 两档：固定值，失败时一眼看出是哪一档触发的。
+const slowDelay = Math.max(0, Math.min(5000, Number(params.get('delay') || 300) | 0));
 
 // 只留选中的那一组，整组移走而不是隐藏：panels() 按 checkVisibility 判，隐藏的它看不见，
 // 但留在 DOM 里会让"假容器有几个"这类计数断言对不上。
@@ -159,6 +203,8 @@ const openPanels = new Set();
 // 验收点就在这里：试过哪几招一目了然，面板数在哪一招之后归零就是哪招有效。
 const closeTries = {};
 const audit = {submitClicked: 0};
+// 形状 D 的选项到底渲染进去了没有。测试拿它排除"fixture 自己没插进去"这种假失败。
+const optionsRendered = {};
 
 const bump = (key, how) => {
   const row = closeTries[key] || (closeTries[key] = {});
@@ -168,8 +214,10 @@ const closePanel = panel => { panel.remove(); openPanels.delete(panel); };
 const panelOf = key => [...openPanels].find(p => p.dataset.owner === key) || null;
 const items = (cls, values) =>
   '<ul>' + values.map(v => '<li class="' + cls + '">' + v + '</li>').join('') + '</ul>';
-const choose = (input, key, panel, cls, after) => {
-  panel.querySelectorAll('.' + cls).forEach(li => li.addEventListener('click', () => {
+// sel 是完整选择器（class 名要自带点号，或者直接给标签名）——形状 D 的裸 span 没有 class。
+const choose = (input, key, panel, sel, after) => {
+  const q = /^[a-z]+$/.test(sel) ? sel : '.' + sel;   // 纯小写字母当标签名，否则当 class
+  panel.querySelectorAll(q).forEach(li => li.addEventListener('click', () => {
     truth[key] = li.textContent;
     input.value = li.textContent;
     if (after) after(panel);
@@ -250,6 +298,41 @@ document.querySelectorAll('[data-shape^="close-"] [data-ps-input]').forEach(inpu
   });
 });
 
+// ---- 形状 D：壳先到、选项延迟 ----
+// 两个控件分别用两种真站 markup：带自家 class 的 div、连 class 都没有的裸 span。
+const D_SETS = {
+  'd-degree': {cls: 'x-aside-item', values: ['本科', '硕士', '博士']},
+  'd-year':   {cls: '',             values: ['2024', '2025', '2026', '2027']},
+};
+document.querySelectorAll('[data-shape="d"] [data-ps-input]').forEach(input => {
+  const key = input.dataset.psInput;
+  const set = D_SETS[key];
+  truth[key] = '';
+  input.addEventListener('click', () => {
+    const open = panelOf(key);
+    if (open) { bump(key, 'click-input-again'); closePanel(open); return; }
+    const box = input.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.className = 'x-aside-panel';
+    panel.dataset.owner = key;
+    panel.style.left = (box.left + scrollX) + 'px';
+    panel.style.top = (box.bottom + scrollY + 2) + 'px';   // 紧贴下方 2px，几何配得上
+    document.body.appendChild(panel);                      // 壳同步到位，里面是空的
+    openPanels.add(panel);
+    // 关键：选项不在这一帧插入，delay 毫秒之后才进去。
+    // 用 class 名区分两种 markup：有 class 的渲染成 div.x-aside-item，没 class 的渲染成裸 span。
+    setTimeout(() => {
+      if (!panel.isConnected) return;                      // 期间被收掉了就不插了
+      const tag = set.cls ? 'div' : 'span';
+      panel.innerHTML = set.values.map(v =>
+        '<' + tag + (set.cls ? ' class="' + set.cls + '"' : '') + '>' + v + '</' + tag + '>').join('');
+      // 选项是延迟插进来的，监听器也只能在这时候挂。选项的选择器就是刚才那个标签名/类名。
+      choose(input, key, panel, set.cls || tag, closePanel);
+      optionsRendered[key] = (optionsRendered[key] || 0) + 1;
+    }, slowDelay);
+  });
+});
+
 // 点字段标题：只记一笔，什么都不做。实测甲站"点字段标题"10 次全部无效，乙站同样无效——
 // 两站都不认这一招，而填写执行器把它排在第二位。标签没有 for=（连了 for= 浏览器会把点击
 // 转发回输入框，刚关的面板又开了）。
@@ -297,6 +380,8 @@ window.fixtureAudit = () => ({
   openPanelClasses: [...openPanels].map(p => p.className),
   fakeContainers: document.querySelectorAll('[class*="sd-Dropdown-container"]').length,
   closeTries: JSON.parse(JSON.stringify(closeTries)),
+  optionsRendered: {...optionsRendered},
+  slowDelay: slowDelay,
   submitClicked: audit.submitClicked,
 });
 })();
