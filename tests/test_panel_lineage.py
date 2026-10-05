@@ -80,3 +80,42 @@ def test_the_rule_is_written_down_for_the_model_too():
     text = PRINCIPLES.read_text(encoding='utf-8')
     assert '点击前后' in text, 'on-site-principles 要写明面板按点击前后的变化找'
     assert '现场试' in text, '收面板不写死顺序，改成现场试并记下哪招有效'
+
+
+def test_close_panels_waits_for_delayed_animation_not_instant_query():
+    """收面板动作发出后应等条件满足，不能瞬时查一次就定论。
+
+    真实站点的组件有过渡动画，瞬时查会把"正在收"读成"没收掉"，从而一招接一招全部失败。
+    修复方法是用带 budget 的条件等待，而不是固定延时。
+    """
+    code = py_code()
+    assert '_panel_closed_within' in code, \
+        '_close_panels 里收面板后的判定要用带 budget 的条件等待，不能用瞬时查询'
+    assert '_panel_still_open' in code and '_panel_closed_within' in code, \
+        '两个函数都要存在：入口用瞬时查（面板还没开，不存在动画），收后用条件等'
+
+
+def test_panel_closed_within_uses_wait_for_not_sleep():
+    """_panel_closed_within 要按"条件满足"返回，而不是睡固定秒。"""
+    import re
+    text = CDP.read_text(encoding='utf-8')
+    # 取 _panel_closed_within 函数体
+    m = re.search(r'def _panel_closed_within\(.*?(?=\ndef )', text, re.DOTALL)
+    assert m, '_panel_closed_within 函数应存在'
+    body = m.group(0)
+    assert '_wait_for' in body, \
+        '_panel_closed_within 应用 _wait_for 按条件等，不应用 time.sleep 固定等'
+    assert 'time.sleep' not in body, \
+        '用 _wait_for 就不需要 sleep：sleep 是固定等，_wait_for 是条件等，只要面板消失就立刻返回'
+
+
+def test_per_trick_budget_is_bounded_reasonably():
+    """每招的等待预算要有上下界：太短仍然卡，太长每招失败要等太久。"""
+    import re
+    text = CDP.read_text(encoding='utf-8')
+    m = re.search(r'per_trick\s*=\s*max\(([^,]+),\s*min\(([^,]+),', text)
+    assert m, 'per_trick 应用 max(lower, min(upper, ...)) 形式限制范围'
+    lower = float(m.group(1).strip())
+    upper = float(m.group(2).strip())
+    assert 0.1 <= lower <= 0.5, f'下界 {lower} 太小会仍然卡（< 0.1）或太大（> 0.5）'
+    assert 0.4 <= upper <= 1.5, f'上界 {upper} 过小时每招失败要等太久或等不够（应在 0.4–1.5 之间）'

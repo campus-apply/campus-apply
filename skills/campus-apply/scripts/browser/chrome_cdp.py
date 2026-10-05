@@ -766,6 +766,20 @@ def _panel_still_open(tab, handle):
     return any(p.get('field') == handle for p in open_now)
 
 
+def _panel_closed_within(tab, handle, budget=0.4):
+    """收面板的动作发出之后，等它真的消失——按条件等，不按秒等。
+
+    收起来往往不是同步的：组件要跑一段过渡动画或者等一轮 React 提交，这期间面板仍在 DOM 里。
+    瞬时查一次会把"正在收"读成"没收掉"，于是一招接一招地试下去，最后判成收不起来——
+    真实站点上第一个延迟收的下拉就会卡住整轮探测。budget 用完仍在就是真没收掉。
+    """
+    expr = 'window.__caFill.stillOpen()'
+    closed, _ = _wait_for(tab, expr,
+                          lambda v: not any(p.get('field') == handle for p in (v or [])),
+                          budget)
+    return closed
+
+
 # 收面板的几招。顺序不写死：哪一招在本页奏效就记下来，后面的字段先试它。
 # 两个真实站点的结论正好相反——一个站"再点一次输入框"十次全中、"点字段标题"十次全不中，
 # 另一个站反过来。所以这是要现场试出来的，不是可以定在代码里的偏好。
@@ -777,10 +791,13 @@ def _close_panels(tab, handle, budget, learned=None):
     """收面板，第一个奏效就停。返回 (用的哪一招, 是否收干净)。
 
     learned 是本页已经试出来的那一招，有就先试它。禁止 document.body.click()，禁止键盘事件。
+    budget 是整个收面板环节的预算，每一招分到其中一份：收起来常有过渡动画或一轮 React
+    提交的延迟，发完动作立刻查会把"正在收"读成"没收掉"。
     """
     if not _panel_still_open(tab, handle):
         _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
         return 'already-closed', True
+    per_trick = max(0.2, min(0.6, (budget or 0) / len(CLOSE_TRICKS)))
     actions = {
         'click-input-again': lambda: _real_click(tab, handle),
         'click-field-label': lambda: _click_own_label(tab, handle),
@@ -796,7 +813,7 @@ def _close_panels(tab, handle, budget, learned=None):
             actions[name]()
         except TabError:
             continue
-        if not _panel_still_open(tab, handle):
+        if _panel_closed_within(tab, handle, per_trick):
             _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
             return name, True
     return 'none', False
