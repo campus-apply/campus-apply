@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 2;
+  const VERSION = 3;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -32,6 +32,91 @@
     : typeof s === 'string' ? s
     : typeof s.baseVal === 'string' ? s.baseVal       // SVGAnimatedString
     : String(s)).replace(/\s+/g, ' ').trim();
+
+  // ── 控件候选：判据只用跨站不变量，不用任何名单 ──────────────────────────────
+  //
+  // 为什么不能只认 NATIVE 那张选择器：它是**淘汰式**的——不在名单上就等于不存在。
+  // 2026-10-06 实测，某招聘站在线简历页的下拉是纯 div 实现，祖先链
+  //   brick-select-selection-placeholder → …-selected-wrap → …-selection → brick-select
+  // 全是 DIV、**一个 role 属性都没有**，于是那两个下拉从来没进过字段表，而报告显示
+  // "27 个控件探完、unsure: 0"——看上去一切正常，其实根本没看见它们。
+  // 往名单里加 [class*="select"] 只是把名单加长，下一个站换个 class 前缀又失手：
+  // class、role、自定义属性全是**开发者的命名约定**，各站不同、随时能改。
+  //
+  // 真正跨站的不变量，是那些**和人类用户的感知绑定、站点想改也不能改**的性质：
+  //   可见            —— 用户要看得到
+  //   够大            —— 用户要点得中
+  //   cursor: pointer —— **站点自己声明"这里能点"**，不是我们猜的
+  // 网站再千变万化，它必须让人类看懂、能操作，否则它自己就废了。这是强制的。
+  //
+  // NATIVE 留着，因为那是 W3C 标准语义而不是各站命名；role 只用于**加分**，
+  // 不作为收候选的必要条件（那个站一个 role 都没有，照样是能用的表单）。
+  const NATIVE = 'input:not([type=hidden]),textarea,select,[contenteditable="true"]';
+  const ROLE_HINT = '[role="combobox"],[role="checkbox"],[role="switch"],[role="radio"],'
+    + '[role="textbox"],[role="listbox"],[role="spinbutton"],[role="searchbox"]';
+  // 用户点得中的最小尺寸。比面板判据（20×10）松：复选框、单选框本来就小。
+  const TAPPABLE_W = 12, TAPPABLE_H = 12;
+
+  // 这个元素看起来能让用户操作吗——只问不变量，一个 class 名都不看。
+  const looksInteractive = el => {
+    // input[type=file] 点了开系统文件选择器，不可逆也会阻塞。这是**类型事实**而不是
+    // "长得像什么"的猜测，所以排除它不属于淘汰式判据（借 jev snapshot.js 的 safe()）。
+    // 上传位由 survey 的五路查找专门处理，不走字段表。
+    if (el.matches('input[type=file],input[type=password]')) return false;
+    if (el.matches(NATIVE)) return true;              // W3C 标准语义，直接算
+    const r = el.getBoundingClientRect();
+    if (r.width < TAPPABLE_W || r.height < TAPPABLE_H) return false;   // 用户点不中
+    const cs = getComputedStyle(el);
+    // 站点自己声明"这里能点"。它为的是让用户看出可点，不是为了被我们认出来，
+    // 所以它不随框架换代而变 —— 这正是它可靠的原因。
+    if (cs.cursor === 'pointer') return true;
+    if (el.matches(ROLE_HINT)) return true;           // 有 role 当然也算（只是不强求）
+    if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
+    return false;
+  };
+
+  // 点下去会把人带离这一页吗。**不是"什么不是控件"的淘汰规则**，而是"点它的代价
+  // 不可逆"——页面一跳走，填到一半的表单和这一轮的 handle 全废。所以不从候选里删，
+  // 只打标记，由调用方决定（probe-options 不点，agent 看得到）。
+  // 判据是不变量：<a href> 带非锚点地址，是 W3C 对"离开本页"的标准表达。
+  // 注意它拦不住 JS 路由（实测那个站的导航就是 <li> + JS 路由，没有 href），
+  // 所以它只是一道附加保险，真正挡住导航的是下面的"旁边有没有标签"。
+  const navigatesAway = el => {
+    const a = el.closest('a[href]');
+    if (!a) return false;
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#')) return false;
+    if (/^javascript:/i.test(href)) return false;
+    return a.href !== location.href;
+  };
+
+  // 会弹系统文件选择器吗——壳是个普通 div，里面藏着 input[type=file]，
+  // 点壳就等于点那个 input。排除 input[type=file] 本身挡不住它（被点的是壳）。
+  // 判据仍是结构事实：这棵子树里有没有 file input，不看 class 叫什么。
+  const opensFilePicker = el =>
+    !!(el.querySelector && el.querySelector('input[type=file]'));
+
+  // 收整页的控件候选。**宁可多收，不许少收**：多收的噪音由调用方看证据排除，
+  // 少收的东西没人知道它存在（那两个 div 下拉就是这么消失的）。
+  // 同一棵树里只留最外层那个非原生候选：brick-select 整块可点，它内部的
+  // placeholder、箭头、wrap 往往也继承了 cursor:pointer，留最外层才对应"一个字段"。
+  const controlCandidates = () => {
+    const hits = [];
+    for (const el of document.querySelectorAll('*')) {
+      if (!visible(el)) continue;
+      if (!looksInteractive(el)) continue;
+      hits.push(el);
+    }
+    const out = [];
+    for (const el of hits) {
+      // 原生元素永远留着，哪怕它嵌在一个可点的壳里（真实的输入框常被包一层）。
+      if (el.matches(NATIVE)) { out.push(el); continue; }
+      if (hits.some(other => other !== el && other.contains(el) && !other.matches(NATIVE)))
+        continue;
+      out.push(el);
+    }
+    return out;
+  };
 
   // 可访问名称：aria-labelledby → aria-label → 关联 label → 子文本 → title → placeholder，递归防环。
   // 比按框架 class 猜标签稳，同一套算法也给 probe 用。
@@ -58,6 +143,100 @@
     }
     return clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder')) || '');
   };
+
+  // ── 标签证据：代码不断定哪个是标签，把各路线索一起给出去 ────────────────────
+  //
+  // nameOf 在那个站上返回的是"请选择"——那是控件内部的**占位符**，不是字段标签。
+  // 页面上明明写着"最高学历"，但它是个独立的 div，和控件没有 for / aria-labelledby
+  // 关联，nameOf 只找 <label> 标签所以找不到。已选中值的情况更隐蔽：国籍那个控件
+  // 内文字是"中国"，照 nameOf 读出来字段就叫"中国"。
+  //
+  // 修法不是"再加一条：占位符就往上找 div"——那又是拿一个站的结构反推规则。
+  // 本质是**代码不该断定哪个是标签**：按不变量把线索都收齐、标明各自来源。
+  //
+  // 为什么"上方/左侧"是不变量：用户靠**位置**知道这是哪个字段——标签必须在控件
+  // 附近，否则人就读不懂这张表。站点可以改 class、改标签用什么元素，但改不了这件事。
+  const labelEvidence = el => {
+    const ev = {};
+    const r = el.getBoundingClientRect();
+    // 1) 标准关联（W3C 语义，最可信，但很多自研组件库根本不用）
+    const ref = (el.getAttribute && el.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map(id => { const t = document.getElementById(id); return t ? clean(t.innerText) : ''; })
+      .filter(Boolean).join(' ');
+    if (ref) ev.ariaLabelledby = ref.slice(0, 60);
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    if (aria) ev.ariaLabel = clean(aria).slice(0, 60);
+    if (el.labels && el.labels.length)
+      ev.labelFor = clean([...el.labels].map(l => l.innerText).join(' ')).slice(0, 60);
+    for (let node = el.parentElement, d = 0; node && node !== document.body && d < 5;
+         node = node.parentElement, d++) {
+      const own = node.querySelector(':scope > label, :scope > * > label');
+      if (own && !own.contains(el) && clean(own.innerText)) {
+        ev.ancestorLabel = clean(own.innerText).slice(0, 60);
+        break;
+      }
+    }
+    // 2) 控件内部的文字。**单独标出来**：它可能是占位符（"请选择"），也可能是已选中的
+    //    值（"中国"），两者都不是字段标签。混进 label 正是那个站的毛病来源。
+    const inner = clean(el.innerText || el.value || '');
+    if (inner) ev.innerText = inner.slice(0, 60);
+    const ph = el.getAttribute && el.getAttribute('placeholder');
+    if (ph) ev.placeholder = clean(ph).slice(0, 60);
+    // 3) 位置线索：上方和左侧最近的那块短文字。用户就是靠这个读懂表单的。
+    //    只收**不包含该控件**的叶子文字节点，避免把控件自己的内容当成标签。
+    const near = test => {
+      let best = null, bestDist = Infinity;
+      for (const n of document.querySelectorAll('span,label,div,p,dt,th,strong,b')) {
+        if (n.children.length) continue;                 // 只要叶子
+        if (n.contains(el) || el.contains(n)) continue;  // 不能是控件自己那块
+        const t = clean(n.innerText);
+        if (!t || t.length > 24) continue;               // 标签是短的
+        if (!visible(n)) continue;
+        const d = test(n.getBoundingClientRect(), r);
+        if (d !== null && d < bestDist) { bestDist = d; best = t; }
+      }
+      return best;
+    };
+    // 上方：横向有重叠、底边在控件顶边之上，取最近的
+    const above = near((nr, cr) => {
+      if (Math.min(nr.right, cr.right) - Math.max(nr.left, cr.left) <= 0) return null;
+      const gap = cr.top - nr.bottom;
+      return (gap >= -2 && gap < 60) ? gap : null;
+    });
+    if (above) ev.above = above;
+    // 左侧：纵向有重叠、右边在控件左边之左，取最近的
+    const left = near((nr, cr) => {
+      if (Math.min(nr.bottom, cr.bottom) - Math.max(nr.top, cr.top) <= 0) return null;
+      const gap = cr.left - nr.right;
+      return (gap >= -2 && gap < 80) ? gap : null;
+    });
+    if (left) ev.left = left;
+    return ev;
+  };
+
+  // 从证据里挑一个最可能的标签，**供排序和显示用**；挑不准返回空串而不是硬猜。
+  // 顺序：标准关联 > 位置线索 > 不要控件内文字。把 innerText/placeholder 排除在外，
+  // 因为"请选择"这种占位符、"中国"这种已选值当标签会让 --only 和语义坐标全部对不上。
+  const bestLabel = ev => clean(ev.ariaLabelledby || ev.ariaLabel || ev.labelFor
+    || ev.ancestorLabel || ev.above || ev.left || '');
+
+  // ── 可点 ≠ 是表单字段 ──────────────────────────────────────────────────────
+  //
+  // cursor:pointer 只说明"这里能点"：logo、导航项、卡片、按钮全算。2026-10-06 实测，
+  // 只按"能点"收候选会把页头的 <img>（logo）和五个 <li>（首页/社会招聘/…）收成字段，
+  // 而 probe-options 会**真的去点它们**——点一下页面就跳走了，不可逆。那几个导航项
+  // 还是 JS 路由而不是 <a href>，拦 href 拦不住。
+  //
+  // 漏掉的那条不变量：表单字段除了能点，还得**能承载一个值**，而用户得知道这个值是给
+  // 哪个问题填的 —— 所以**字段旁边必然有标签**。这是强制的：没有标签的输入框，人也不
+  // 知道该填什么。实测对得上：那几个 div 下拉的 above 全是真标签（"最高学历"、
+  // "国籍地区"…），而 logo 和导航项的 above / left 全是空。
+  //
+  // 但"没标签"**不等于不是字段**（只有占位符的搜索框是真实存在的形状），所以这里
+  // 不淘汰任何东西，只**分成两组**：带标签线索的进字段表，其余列成 unlabeled 交给
+  // agent 看。少收的东西没人知道它存在，分组则两边都看得见。
+  const hasLabelClue = ev => !!(ev.ariaLabelledby || ev.ariaLabel || ev.labelFor
+    || ev.ancestorLabel || ev.above || ev.left);
 
   // 面板怎么找：**按点击前后谁新出现了**，不按 class 清单猜。
   //
@@ -214,9 +393,20 @@
         return best;
       };
       const rows = [];
-      for (const el of document.querySelectorAll(Q)) {
+      const unlabeled = [];
+      // 收控件用**跨站不变量**（controlCandidates），不用选择器名单：名单是淘汰式的，
+      // 不在名单上的控件直接从字段表里消失，而报告看上去一切正常。
+      //
+      // 分两组：**可点 ≠ 是字段**。原生元素无条件算字段（W3C 语义已经说明它是输入
+      // 控件）；非原生的要看旁边有没有标签 —— 有标签的是字段，没有的列进 unlabeled
+      // **交给 agent 看**，不淘汰。logo 和导航项就是这么和真下拉分开的，
+      // 而不用写一条"排除 img/li"的规则。
+      for (const el of controlCandidates()) {
         if (!visible(el)) continue;
-        rows.push({ el, section: sectionOf(el), label: nameOf(el) });
+        const ev = labelEvidence(el);
+        const row = { el, section: sectionOf(el), label: bestLabel(ev) || nameOf(el), labels: ev };
+        if (el.matches(NATIVE) || hasLabelClue(ev)) rows.push(row);
+        else unlabeled.push(row);
       }
       // 条目序号按 DOM 结构认，不按"标签重复"认：两个控件共用一个 label 是常事
       // （年/月、起/止），拿标签重复当换条目的信号，会把同一条记录劈成两条。
@@ -261,9 +451,21 @@
         const n = (counters.get(sec + ' ' + occurrence + ' ' + row.label) || 0) + 1;
         counters.set(sec + ' ' + occurrence + ' ' + row.label, n);
         const r = rectOf(row.el);
+        const cs = getComputedStyle(row.el);
         out.push({ handle: register(row.el), section: sec, occurrence,
                    label: row.label, nth: n, tag: row.el.tagName.toLowerCase(),
                    type: row.el.getAttribute('type') || '',
+                   // 下面五项是**证据**，给调用方和 agent 判断用，代码自己不据此淘汰：
+                   // native 是不是 W3C 标准元素（原生的点击可逆、可以自动探）；
+                   // cursor 是站点自己声明的"这里能点"；role 有就报（那个站一个都没有）；
+                   // labels 各路标签线索连来源一起给——innerText 可能只是占位符或已选值；
+                   // navigates / opensFilePicker 标的是**点击不可逆**，不是"不是控件"。
+                   native: row.el.matches(NATIVE),
+                   cursor: cs.cursor,
+                   role: row.el.getAttribute('role') || '',
+                   labels: row.labels,
+                   navigates: navigatesAway(row.el),
+                   opensFilePicker: opensFilePicker(row.el),
                    disabled: !!row.el.disabled || row.el.getAttribute('aria-disabled') === 'true',
                    readonly: !!row.el.readOnly || row.el.getAttribute('aria-readonly') === 'true',
                    maxlength: row.el.getAttribute('maxlength'),
@@ -271,7 +473,19 @@
                    valueLen: typeof row.el.value === 'string' ? row.el.value.length : null,
                    rect: r });
       }
-      return { url: location.href, title: document.title, fields: out };
+      return { url: location.href, title: document.title, fields: out,
+               // 可点但旁边没有标签线索的候选。**不是字段表的一部分，也没被扔掉**——
+               // 调用方不去点它们（点 logo 会跳走），但 agent 看得到它们存在。
+               // 真实表单里确实有只带占位符的搜索框，哪天需要就从这里取。
+               unlabeled: unlabeled.slice(0, 40).map(row => ({
+                 handle: register(row.el), tag: row.el.tagName.toLowerCase(),
+                 cls: clean(row.el.className).slice(0, 48) || row.el.tagName,
+                 cursor: getComputedStyle(row.el).cursor,
+                 navigates: navigatesAway(row.el),
+                 opensFilePicker: opensFilePicker(row.el),
+                 innerText: (row.labels.innerText || '').slice(0, 24),
+                 rect: rectOf(row.el),
+               })) };
     },
 
     // 按语义坐标找控件。四维都给才唯一，缺的维度按"只有一个候选才算数"处理。

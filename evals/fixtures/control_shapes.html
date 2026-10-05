@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>虚构网申表单：控件认别测试台</title>
+<!--
+  本地测试用的虚构网申页，不连任何招聘站，字段值全是编的。
+  站名不写进 fixture（结论归站点笔记），只记结构。
+
+  这一页复刻的是 2026-10-06 在某招聘站在线简历页上实测到的三种结构，它们合起来
+  正好把"代码该不该自己决定点哪个"这个问题逼出来：
+
+  形状 1 —— 纯 div 下拉：整条祖先链全是 DIV、**一个 role 属性都没有**，靠
+             cursor:pointer 和"标签在上方"才认得出。旧的窄选择器
+             （input/textarea/select/[role=combobox]）看不见它，于是这个字段
+             从字段表里整个消失，而报告显示"N 个控件探完、unsure: 0"——
+             **看上去一切正常，其实根本没看见它。**
+  形状 2 —— 导航项：<li cursor:pointer> 和 <img cursor:pointer>（logo），
+             按"可见 + 够大 + cursor:pointer"收候选时会被收进来。它们是 JS 路由
+             而**不是 <a href>**，所以拦 href 拦不住。点一下页面就跳走，不可逆。
+             实测后果：自动探测把整页探测带到了另一个页面。
+  形状 3 —— 上传按钮：一个普通 div 壳包着隐藏的 input[type=file]，点壳会弹
+             系统文件选择器。排除 input[type=file] 本身挡不住它——点的是壳。
+
+  **判据不是本页要测的东西，分工才是**：形状 1 必须能被看见（少收=悄悄瞎掉），
+  形状 2 和 3 必须不被自动点击（点击不可逆）。两件事不能靠同一个开关解决，
+  这正是"原生控件自己走、非原生交给 agent"的由来。
+
+  查询参数：
+    ?shape=1|2|3|all   只渲染哪一组，不给就全渲染
+    ?nav=router|href   形状 2 的导航用 JS 路由（默认，更难拦）还是 <a href>
+
+  给测试用的接口（都是只读的，页面自己不调）：
+    window.fixtureTruth()   —— 真值，每个控件页面内部实际存着什么
+    window.fixtureAudit()   —— 行为审计：导航触发过几次、文件选择器弹过几次、
+                               面板开着几个、每个下拉被点开过几次
+-->
+<style>
+body{font:16px/1.7 system-ui,sans-serif;max-width:900px;margin:0 auto 24px;padding:0 16px;color:#222}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
+.ci-field{margin:14px 0}
+.ci-label{display:block;color:#555;margin-bottom:4px;font-weight:500}
+.ci-note{color:#888;font-size:14px;margin:4px 0 0}
+
+/* ── 形状 2：页头导航。logo 是 <img>，菜单项是 <li>，都 cursor:pointer ── */
+.ci-head{background:#fff;border-bottom:1px solid #eee;padding:8px 16px;margin:0 -16px 20px;
+  display:flex;align-items:center;gap:24px}
+.ci-logo{width:92px;height:30px;cursor:pointer}
+.ci-menu{list-style:none;display:flex;gap:22px;margin:0;padding:0}
+.ci-menu li{cursor:pointer;color:#333;padding:4px 2px}
+.ci-menu li:hover{color:#36c}
+
+/* ── 形状 1：纯 div 下拉。祖先链刻意做成多层 DIV，没有任何 role ── */
+.brick-field-control{position:relative;width:280px}
+.brick-select{box-sizing:border-box;border:1px solid #d9d9d9;border-radius:4px;background:#fff;
+  cursor:pointer;user-select:none}
+.brick-select-selection{box-sizing:border-box;display:flex;align-items:center;
+  justify-content:space-between;height:36px;padding:0 10px}
+.brick-select-selection-selected-wrap{overflow:hidden;white-space:nowrap}
+.brick-select-selection-placeholder{color:#bbb}
+.brick-select-selection-value{color:#222}
+.brick-select-arrow{color:#bbb;font-size:12px;margin-left:8px}
+.brick-select-dropdown{position:absolute;left:0;top:100%;margin-top:2px;z-index:60;
+  box-sizing:border-box;width:100%;background:#fff;border:1px solid #d9d9d9;border-radius:4px;
+  box-shadow:0 4px 14px rgba(0,0,0,.12);max-height:200px;overflow:auto;padding:4px 0}
+/* 选项也不带 role，而且两种写法各一个：带自家 class 的 div、连 class 都没有的裸 span */
+.brick-option,.brick-select-dropdown span{display:block;padding:7px 12px;cursor:pointer;min-height:20px}
+.brick-option:hover,.brick-select-dropdown span:hover{background:#f0f6ff}
+
+/* ── 形状 3：上传。壳是 div，真正的 input[type=file] 藏起来 ── */
+.ci-upload{box-sizing:border-box;border:2px dashed #ccc;border-radius:6px;padding:20px;
+  text-align:center;color:#777;cursor:pointer;width:460px}
+.ci-upload:hover{border-color:#6aa9e9;background:#f7fbff}
+.ci-upload input[type=file]{display:none}
+
+/* 普通原生输入框，做对照：它在任何版本的选择器下都看得见 */
+.ci-text{box-sizing:border-box;font:inherit;height:36px;width:280px;padding:6px 10px;
+  border:1px solid #d9d9d9;border-radius:4px}
+</style>
+
+<div class="ci-head" id="ci-head">
+  <!-- logo：裸 img，cursor:pointer，没有 role、没有 alt 之外的任何语义。
+       它旁边没有标签文字 —— 这是它和真字段的区别。 -->
+  <img class="ci-logo" id="ci-logo" alt="示例公司"
+       src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='92' height='30'%3E%3Crect width='92' height='30' fill='%234a7fe0' rx='4'/%3E%3Ctext x='46' y='20' font-size='13' fill='white' text-anchor='middle' font-family='sans-serif'%3E示例公司%3C/text%3E%3C/svg%3E">
+  <ul class="ci-menu" id="ci-menu"></ul>
+</div>
+
+<h1>虚构网申表单：控件认别测试台</h1>
+<p>本地测试台，所有字段值都是编的；这里没有真实投递，也不会真的跳转到外部站点。</p>
+
+<section class="ci-group" data-group="1">
+  <h2>形状 1：纯 div 下拉（无 role、无原生控件）</h2>
+  <!-- 祖先链：brick-field-control → brick-select → brick-select-selection
+            → brick-select-selection-selected-wrap → brick-select-selection-placeholder
+       全是 DIV，一个 role 都没有。标签是独立的 div，和控件没有 for / aria-labelledby 关联，
+       只能靠"它在控件上方"认出来。 -->
+  <div class="ci-field" data-shape="1">
+    <div class="ci-label">最高学历</div>
+    <div class="brick-field-control" data-ci-select="degree">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">选项是带 class 的 div；控件内文字是占位符"请选择"，不是标签。</p>
+  </div>
+  <div class="ci-field" data-shape="1">
+    <div class="ci-label">国籍地区</div>
+    <!-- 这个已经有值了（"中国"）：控件内文字是**已选中的值**，同样不是标签。
+         labels.innerText 和 labels.above 必须分开标，否则 label 会读成"中国"。 -->
+    <div class="brick-field-control" data-ci-select="country">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-value">中国</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">选项是裸 span（连 class 都没有）；控件内文字是已选值"中国"。</p>
+  </div>
+  <div class="ci-field" data-shape="1">
+    <div class="ci-label">姓名</div>
+    <input type="text" class="ci-text" id="ci-name" data-ci-text="name" placeholder="请输入真实姓名">
+    <p class="ci-note">原生对照组：任何版本都看得见它，标签应读成"姓名"而不是占位符。</p>
+  </div>
+</section>
+
+<section class="ci-group" data-group="3">
+  <h2>形状 3：上传按钮（div 壳包隐藏的 file input）</h2>
+  <!-- 点这个 div 会调 input.click() 弹系统文件选择器。排除 input[type=file] 本身
+       挡不住它 —— 被点的是外面这个壳，壳是个普通 div，有 cursor:pointer，
+       而且**上方有标签文字**（"附件简历"），所以"按标签分组"也照样把它当字段。 -->
+  <div class="ci-field" data-shape="3">
+    <div class="ci-label">附件简历</div>
+    <div class="ci-upload" id="ci-upload">
+      拖拽/点击上传您的简历
+      <input type="file" id="ci-file" accept=".doc,.docx,.pdf">
+    </div>
+    <p class="ci-note">点壳会弹文件选择器（本页只计数，不真的弹）。</p>
+  </div>
+</section>
+
+<script>
+(() => {
+'use strict';
+const params = new URL(location.href).searchParams;
+const shape = (params.get('shape') || 'all').toLowerCase();
+const navMode = (params.get('nav') || 'router').toLowerCase();
+
+// ---- 真值与审计 ----
+const truth = {degree: '', country: '中国', name: ''};
+const audit = {navTriggered: 0, navTargets: [], filePickerOpened: 0,
+               openPanels: 0, selectOpened: {}};
+window.fixtureTruth = () => ({...truth});
+window.fixtureAudit = () => ({...audit, navTargets: [...audit.navTargets],
+                              selectOpened: {...audit.selectOpened},
+                              openPanels: document.querySelectorAll('.brick-select-dropdown').length,
+                              shape, navMode});
+
+// ---- 形状 2：导航。默认用 JS 路由（没有 <a href>，拦 href 拦不住）----
+const MENU = ['首页', '社会招聘', '校园招聘', '了解公司', '个人中心'];
+const menu = document.getElementById('ci-menu');
+const goto_ = what => {
+  // 只记账，不真的导航 —— fixture 要能反复跑，真跳走就没法连续测了。
+  // 真实站点上这一下是不可逆的，这正是不许自动点它的原因。
+  audit.navTriggered++;
+  audit.navTargets.push(what);
+};
+for (const text of MENU) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  if (navMode === 'href') {
+    const a = document.createElement('a');
+    a.href = 'https://example.invalid/' + encodeURIComponent(text);
+    a.textContent = text;
+    a.addEventListener('click', e => { e.preventDefault(); goto_(text); });
+    li.textContent = '';
+    li.appendChild(a);
+  } else {
+    li.addEventListener('click', () => goto_(text));   // JS 路由：没有 href 可拦
+  }
+  menu.appendChild(li);
+}
+document.getElementById('ci-logo').addEventListener('click', () => goto_('logo→首页'));
+
+// ---- 形状 1：纯 div 下拉 ----
+const SETS = {
+  degree:  {values: ['大专', '本科', '硕士', '博士'], bare: false},
+  country: {values: ['中国', '美国', '新加坡'],       bare: true},
+};
+const closeAll = () => document.querySelectorAll('.brick-select-dropdown').forEach(p => p.remove());
+document.querySelectorAll('[data-ci-select]').forEach(control => {
+  const key = control.dataset.ciSelect;
+  const set = SETS[key];
+  control.querySelector('.brick-select').addEventListener('click', () => {
+    const open = control.querySelector('.brick-select-dropdown');
+    if (open) { open.remove(); return; }              // 再点一次收起
+    closeAll();
+    audit.selectOpened[key] = (audit.selectOpened[key] || 0) + 1;
+    const panel = document.createElement('div');
+    panel.className = 'brick-select-dropdown';
+    // 两种选项写法：带 class 的 div，和裸 span（连 class 都没有）。
+    // 两种都不带 role —— 按 role/class 列举选项时命中 0 个，只有结构判据认得出。
+    const tag = set.bare ? 'span' : 'div';
+    panel.innerHTML = set.values.map(v =>
+      '<' + tag + (set.bare ? '' : ' class="brick-option"') + '>' + v + '</' + tag + '>').join('');
+    panel.querySelectorAll(tag).forEach(item => item.addEventListener('click', e => {
+      e.stopPropagation();
+      truth[key] = item.textContent;
+      const wrap = control.querySelector('.brick-select-selection-selected-wrap');
+      wrap.innerHTML = '<div class="brick-select-selection-value">' + item.textContent + '</div>';
+      panel.remove();
+    }));
+    control.appendChild(panel);                        // 面板插在控件内部，不挂 body
+  });
+});
+
+// ---- 形状 3：上传壳 ----
+const file = document.getElementById('ci-file');
+document.getElementById('ci-upload').addEventListener('click', () => {
+  // 真实站点这里是 file.click()，会弹系统文件选择器（不可逆、会阻塞）。
+  // fixture 只记账，让测试能断言"有没有被点到"而不用真的弹窗。
+  audit.filePickerOpened++;
+});
+
+// ---- 原生对照组 ----
+const nameInput = document.getElementById('ci-name');
+nameInput.addEventListener('input', () => { truth.name = nameInput.value; });
+
+// 只留选中的那一组，整组移走而不是隐藏：按可见性判的代码看不见隐藏元素，
+// 但留在 DOM 里会让"候选有几个"这类计数断言对不上。
+if (shape !== 'all') {
+  document.querySelectorAll('.ci-group').forEach(g => {
+    if (g.dataset.group !== shape) g.remove();
+  });
+  // shape=2 只看导航，把表单区整个移走；其余情况导航栏都留着（它是噪音源）
+  if (shape === '2') document.querySelectorAll('.ci-group').forEach(g => g.remove());
+}
+})();
+</script>

@@ -1476,6 +1476,9 @@ def cmd_survey(out_path):
                       stable=stable, field_counts=counts, buttons=buttons,
                       sections=sorted({f['section'] for f in outline['fields']}),
                       fields=outline['fields'],
+                      # 可点但旁边没有标签线索的候选。它们不是字段，但也不该消失——
+                      # agent 看得到才有机会说"那个其实是个搜索框，去探它"。
+                      unlabeled=outline.get('unlabeled') or [],
                       probe=probe, upload=uploads)
         try:
             with open(out_path, 'w', encoding='utf-8') as fh:
@@ -1537,6 +1540,34 @@ def cmd_probe_options(out_path, only=None):
             if wanted and key not in wanted and f['label'] not in wanted:
                 continue
             if f['disabled'] or f['sensitive']:
+                continue
+            # 点击不可逆的字段**不点**，但留在报告里。页面一跳走、文件选择器一弹，
+            # 整轮探测就废了（2026-10-06 两次实测：导航到了别的页面、弹出系统弹窗）。
+            # 这不是"它不是控件"的判断——它是不是控件由 agent 看证据定，
+            # 代码只拒绝替 agent 承担这一下不可逆的点击。
+            if f.get('navigates') or f.get('opensFilePicker'):
+                why = ('点它会离开本页（<a href> 指向别处）' if f.get('navigates')
+                       else '点它会弹系统文件选择器（这棵子树里有 input[type=file]）')
+                out.append(dict(key=key, label=f['label'], kind='irreversible',
+                                note=why + '，没有去点。要探它得由 agent 单独确认',
+                                navigates=bool(f.get('navigates')),
+                                opensFilePicker=bool(f.get('opensFilePicker'))))
+                continue
+            # 非原生候选（纯 div 实现的控件）**列出来但不自动点**。
+            # 原生控件点一下只是聚焦或开面板，可逆；非原生的"可点"背后可能是任何
+            # JS 行为——提交、路由、弹窗，代码无从判断。jev 的分工是代码只列候选、
+            # 模型挑一个再执行；这里折中：原生照旧批量探，非原生交给 agent 点名。
+            #
+            # `--only` 指名要探的除外——那正是 agent 在点名，这条命令本来就是
+            # "agent 看完证据之后回来探这一个"的入口，不该再拦它。
+            if not f.get('native') and not wanted:
+                out.append(dict(key=key, label=f['label'], kind='needs-agent',
+                                note='非原生控件（没有 input/textarea/select，靠 cursor:pointer '
+                                     '和标签位置认出来的），自动探测不点它。证据见 evidence，'
+                                     '确认是下拉就用 --only 单独探这个字段',
+                                evidence=dict(tag=f.get('tag'),
+                                              cursor=f.get('cursor'), role=f.get('role'),
+                                              labels=f.get('labels'))))
                 continue
             if f['tag'] == 'select':                         # 原生 select 不用点开
                 got = _fill_call(tab, 'window.__caFill.nativeSelect(%d, %s)'
