@@ -20,6 +20,14 @@ APPLY_FILL = SKILLS / 'apply-fill/SKILL.md'
 ROUTER = SKILLS / 'campus-apply/SKILL.md'
 JOB_SCREEN = SKILLS / 'job-screen/SKILL.md'
 UPLOAD_DOC = SKILLS / 'apply-fill/references/upload-and-parse.md'
+# 正文瘦身后（见 test_skill_body_size），步骤细则搬进 references，正文只留不可逆的几条。
+# 下面的断言跟着内容走：不可逆的查正文，流程细则查搬过去的那份。
+PAGE_LOOP = SKILLS / 'apply-fill/references/page-loop.md'
+JOB_SCREEN_STEPS = SKILLS / 'job-screen/references/steps.md'
+JOB_SCREEN_CHECKLIST = SKILLS / 'job-screen/references/checklist.md'
+ROUTING = SKILLS / 'campus-apply/references/routing.md'
+RED_FLAGS = SKILLS / 'campus-apply/references/red-flags.md'
+TALKING = SKILLS / 'campus-apply/references/talking-to-the-user.md'
 
 
 def every_doc():
@@ -27,8 +35,9 @@ def every_doc():
 
 
 def test_apply_fill_requires_a_tailored_resume_before_starting():
+    """前提是不可逆的一条（没有简历就开填 = 投出去一份没改过的），所以留在正文里。"""
     text = APPLY_FILL.read_text(encoding='utf-8')
-    head = text[:text.index('## 开始')]
+    head = text[text.index('## 前提'):text.index('## 不可逆的几条')]
     assert 'resume.md' in head and 'PDF' in head, 'the prerequisite must name both artifacts'
     assert '不开始' in head or '不开工' in head, 'it must say the skill does not start without them'
     assert 'resume-tailor' in head, 'it must point at the skill that produces them'
@@ -44,11 +53,11 @@ def test_the_no_resume_text_exception_is_gone_everywhere():
 
 
 def test_upload_comes_before_filling_fields():
-    text = APPLY_FILL.read_text(encoding='utf-8')
-    assert '第一件事是传简历 PDF 附件' in text, 'the entry step must put the upload first'
+    loop = PAGE_LOOP.read_text(encoding='utf-8')
+    assert '第一件事是传简历 PDF 附件' in loop, 'the entry step must put the upload first'
     upload = UPLOAD_DOC.read_text(encoding='utf-8')
     # 顺序不变（有上传位的页面上，附件先于字段），变的是判定时机：按页探，不按流程阶段定。
-    assert '传附件永远排在填字段之前' in text
+    assert '传附件永远排在填字段之前' in loop
     assert '先探一次有没有上传位' in upload
     assert '不要停下来问' in upload, '本页没有上传位时不该停下来问'
     assert '不要先填字段再传附件' in upload, 'the wrong order must be called out explicitly'
@@ -69,34 +78,38 @@ def test_other_attachments_still_come_from_the_user():
     """Only the resume PDF is sent by default. Transcripts, photos and portfolios need a file
     from the user, because we have no business guessing which file is meant."""
     text = APPLY_FILL.read_text(encoding='utf-8')
-    section = text[text.index('## 不做'):]
+    section = text[text.index('## 不可逆的几条'):]
     assert '证件照' in section and '成绩单' in section
 
 
 def test_job_screen_hands_off_to_resume_tailor():
     text = JOB_SCREEN.read_text(encoding='utf-8')
     assert 'resume-tailor' in text, 'job-screen must name the next skill'
-    steps = text[text.index('## 步骤'):text.index('## 不做')]
+    handoff = text[text.index('## 交接'):]
+    assert 'resume-tailor' in handoff, '正文要留下交接对象'
+    assert '填网申要等它跑完' in handoff, '并且说明填表排在它之后'
+    steps = JOB_SCREEN_STEPS.read_text(encoding='utf-8')
+    steps = steps[steps.index('## 步骤'):]
     assert re.search(r'10\..*resume-tailor', steps, re.S), 'the handoff must be a numbered step'
-    checklist = text[text.index('## 执行清单'):]
+    checklist = JOB_SCREEN_CHECKLIST.read_text(encoding='utf-8')
     assert 'resume-tailor' in checklist, 'and a checklist line, so it cannot be skipped silently'
 
 
 def test_router_sends_an_untailored_job_to_resume_tailor_first():
-    text = ROUTER.read_text(encoding='utf-8')
-    order = text[text.index('## 判断顺序'):text.index('## 边界')]
+    text = ROUTING.read_text(encoding='utf-8')
+    order = text[text.index('## 判断顺序'):text.index('## 四步有先后')]
     assert 'resume-tailor' in order
     assert '简历 PDF' in order or 'PDF' in order, 'the router should check for the PDF too'
 
 
 def test_router_states_the_four_steps_are_ordered():
-    text = ROUTER.read_text(encoding='utf-8')
-    assert '改简历没做完不开始填表' in text
+    """四步的先后是不可逆的一条（没改简历就投 = 名额用掉了），所以留在正文里。"""
+    assert '改简历没做完不开始填表' in ROUTER.read_text(encoding='utf-8')
 
 
 def test_red_flags_cover_filling_before_tailoring():
-    text = ROUTER.read_text(encoding='utf-8')
-    flags = text[text.index('## 红旗'):]
+    text = RED_FLAGS.read_text(encoding='utf-8')
+    flags = text[text.index('# 红旗'):]
     assert '简历一会儿再改' in flags
     assert '附件等填完字段再传' in flags
 
@@ -123,11 +136,11 @@ def test_pauses_are_tiered_not_uniform():
 
 def test_evidence_is_defined_and_excludes_our_own_rules():
     """两条规矩原本能读出矛盾：一边不许说文件路径，一边要求写明"依据"。"""
-    text = ROUTER.read_text(encoding='utf-8')
+    text = TALKING.read_text(encoding='utf-8')
     assert '技能规定不是依据' in text
     assert '页面原文' in text and '站点笔记' in text and '不知道' in text
     assert '这是 xx 技能第几步要求的' in text, '要给出反例，光写禁令不够'
-    flags = text[text.index('## 红旗'):]
+    flags = RED_FLAGS.read_text(encoding='utf-8')
     assert '技能要求的' in flags
 
 
