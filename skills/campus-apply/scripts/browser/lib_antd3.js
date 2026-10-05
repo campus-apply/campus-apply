@@ -24,7 +24,7 @@ window.__ca = (() => {
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
   // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
-  // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
+  // 下拉面板基本都是 fixed，拿它判会整类漏掉。
   // 优先用 checkVisibility（Chrome 105+ 一次把 display / visibility / opacity / content-visibility 都算上），
   // 老浏览器退回"有布局盒子 + 没被 display:none / visibility:hidden"。
   const visible = el => {

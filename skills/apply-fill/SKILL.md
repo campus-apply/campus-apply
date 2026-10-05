@@ -1,6 +1,6 @@
 ---
 name: apply-fill
-description: "陪用户逐页填写招聘网站的网申表单和在线简历，能填的填、该用户做的等用户做，不点提交。Use when the user has an application form or online resume page open in the dedicated browser and wants it filled from their tailored resume; triggers: 填网申 / 帮我填表 / 陪我投 / fill the application."
+description: "Use when an application form or online resume page is open in the dedicated browser and the user wants it filled from their tailored resume; triggers: 填网申 / 帮我填表 / 陪我投 / 这页怎么填 / fill the application。"
 ---
 
 # apply-fill：陪跑式填网申

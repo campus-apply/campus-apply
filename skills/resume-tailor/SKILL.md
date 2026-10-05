@@ -1,6 +1,6 @@
 ---
 name: resume-tailor
-description: "对照一份 JD 产出针对该岗位的简历定稿文字、一页 docx 和网申长文本，没有 JD 时产出通用版底稿。Use when the user has a target job (JD) and wants to tailor their resume or write application-form essays; triggers: 改简历 / 针对这个岗位 / 写网申内容 / tailor resume."
+description: "Use when the user has picked a target job and the generic resume does not speak to it, or needs the long free-text answers an application form asks for; triggers: 改简历 / 针对这个岗位 / 写网申内容 / 自我描述 / 求职动机 / tailor resume。"
 ---
 
 # resume-tailor：对照 JD 改简历与网申文本

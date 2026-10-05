@@ -1,6 +1,6 @@
 ---
 name: campus-apply
-description: "国内校招求职全流程的入口，负责看清工作目录的现状并指到下一个 skill。Use when the user mentions 求职 / 投简历 / 校招 / 网申 / job hunting without naming a specific step."
+description: "Use when the user brings up job hunting without naming a specific step, or when you need to tell where a campus-apply workspace stands and what comes next; triggers: 求职 / 投简历 / 校招 / 网申 / 下一步做什么 / job hunting."
 ---
 
 # campus-apply：入口与路线

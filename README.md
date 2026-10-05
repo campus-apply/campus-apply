@@ -20,15 +20,35 @@ It keeps a sourced fact base with your preferences, screens jobs on a company's 
 | `resume-facts` | 初始化工作目录，建事实库，口径访谈、求职偏好访谈、个人档案访谈 |
 | `job-screen` | 在公司招聘页上列全量岗位、读每个岗位的详情（先看页面自己怎么取数据，能复用就复用，否则逐个读页面）、出三档筛选表和排除清单，同时出一份 Excel |
 | `resume-tailor` | 对照岗位出素材方案、写定稿文字、原地改 docx、写网申长文本与自述，写完过去 AI 味清单 |
-| `apply-fill` | 陪跑式填表：认领标签页、探测控件、逐页填写与回读、保存后核对、提交前比对预览 |
+| `apply-fill` | 陪跑式填表：认领标签页、一条命令摸清整页、按语义坐标逐页填写与回读、保存后核对、提交前比对预览 |
 
 顺序：`resume-facts`（一次）→ `job-screen` → `resume-tailor` → `apply-fill`。已有 JD 可以跳过筛岗。
 
 Flow: facts once, then screen, tailor, fill. Skip screening when you already have a job description.
 
+## 填表这一步在做什么 / How filling works
+
+填一整页表的时间，大半不花在浏览器上，而花在"页面已经就绪、却没有任何命令在跑"的那些空当里——
+agent 在抄控件清单、编下标、写计划。这一版把那几件事交还给代码：
+
+- `survey` 只读地一次把这页摸清：渲染稳没稳、有哪些字段、各自什么属性、有没有上传位。
+- `probe-options` 逐个打开下拉读回完整选项表再收起来（会点页面，动手前会跟你说）。
+- `plan-skeleton` 直接出一份计划骨架，每个字段带它的语义坐标（哪个板块、第几条记录、什么标签），
+  agent 只需要往 `value` 里填值。
+- `fill` 一条命令填完整页并逐字段回读。
+
+字段按语义定位而不是按序号，所以中途给某个板块加一条经历，计划不会失效；证件号、出生日期这类
+字段默认拒绝写入。想知道一次投递里浏览器闲了多久，把 `CA_TIMING_FILE` 指向一个文件，
+结束后跑 `skills/campus-apply/scripts/idle_report.py`。
+
+Most of the time spent filling a form is not spent in the browser: it is the agent copying
+control lists and numbering fields while the page sits idle. This version hands that work back
+to the code — one command to survey the page, one to read every dropdown's options, one to
+generate the plan skeleton with semantic coordinates, one to fill and read back.
+
 ## 安装 / Install
 
-需要 Claude Code、Codex、CodeBuddy Code 或 DeepSeek Harness 其中一个，macOS 和 Windows 都可以。最省事的是对你用的 agent 说一句"帮我安装 GitHub 上 campus-apply/campus-apply 这个 skill"，它会按下面对应的一段替你执行。装完新开一个会话就能看到五个 skill，先让它跑一下 `doctor.py`。
+需要 Claude Code、Codex、CodeBuddy Code 或 DeepSeek Harness 其中一个，macOS 和 Windows 都可以。最省事的是对你用的 agent 说一句"帮我安装 GitHub 上 campus-apply/campus-apply 这个 skill"，它会按下面对应的一段替你执行。装完新开一个会话就能看到五个 skill，先让它跑一下 `doctor.py`。**装完顺手让 agent 列一下它现在能用的 skill**，确认这五个在里面——不同 agent 读的 skill 目录不一样，装到了另一个目录的话，到用的时候才发现就晚了。
 
 **Claude Code**：输入 `/plugin marketplace add campus-apply/campus-apply`，再输入 `/plugin install campus-apply@campus-apply`（让 agent 执行这两条也行）。电脑上没有 Git（从 GitHub 安装要靠它）：到 [Releases](https://github.com/campus-apply/campus-apply/releases) 下载 zip 解压，`/plugin marketplace add <解压后的目录>`，再 `/plugin install campus-apply@campus-apply`。
 

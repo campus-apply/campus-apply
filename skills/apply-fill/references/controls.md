@@ -28,7 +28,7 @@
 - Element UI（Vue）：`.el-input__inner`、`.el-select` + `.el-select-dropdown`、`.el-date-editor`；赋值同样要用原型 setter + input 事件。
 - 原生 `<select>`：直接改 `value` 再派发 `change`。
 - 现场探测：先跑 `survey`（或 `probe.js`）看 `kind`、`cls` 和 `wrapCls`，再决定用哪套写法。
-- class 带发版哈希后缀（如 Moka 的 `search-LvPmRxVfY4`）：用前缀匹配 `[class^="search-"]` 或 `[class*="search-"]`，不要写死整个 class。
+- class 带发版哈希后缀（形如 `search-LvPmRxVfY4`，每次发版都变）：用前缀匹配 `[class^="search-"]` 或 `[class*="search-"]`，不要写死整个 class。
 
 ## Moka（`sd-` 前缀组件）
 - 字段容器 `[class*="apply-field-"]`，文本以字段标题开头；板块容器 `[class*="apply-block-"]`，条目组 `[class*="apply-fields-"]`，每个板块的"添加"按钮加一组。

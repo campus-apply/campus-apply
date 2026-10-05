@@ -606,7 +606,7 @@ def element_expr(target):
     """click / type 共用的目标写法：js: 表达式求值得到元素，否则是 CSS 选择器（取第一个可见匹配）。
 
     可见性不用 offsetParent：它对 position:fixed 的元素恒为假，而弹窗里的按钮、挂在 body 下的
-    下拉面板项几乎都是 fixed 或绝对定位，用它会点不到（待处理 105）。
+    下拉面板项几乎都是 fixed 或绝对定位，用它会点不到。
     """
     if target.startswith('js:'):
         return target[3:]
@@ -843,7 +843,7 @@ def _real_click(tab, handle):
 
 
 def _verify(tab, handle, want, display_selector, kind):
-    """三层回读。显示值与 DOM 一致即通过；模型层只作参考，不单独否决（待处理 100）。"""
+    """三层回读。显示值与 DOM 一致即通过；模型层只作参考，不单独否决。"""
     back = _fill_call(tab, 'window.__caFill.readback(%d, %s)'
                       % (handle, json.dumps(display_selector) if display_selector else 'null'))
     errors = _fill_call(tab, f'window.__caFill.errors({handle})') or []

@@ -23,7 +23,7 @@
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
 
   // 可访问名称：aria-labelledby → aria-label → 关联 label → 子文本 → title → placeholder，递归防环。
-  // 比按框架 class 猜标签稳，同一套算法也给 probe 用（待处理 90）。
+  // 比按框架 class 猜标签稳，同一套算法也给 probe 用。
   const nameOf = (el, seen) => {
     seen = seen || new Set();
     if (!el || seen.has(el)) return '';
@@ -483,7 +483,7 @@
       return { ok: clean(el.options[el.selectedIndex].text) === clean(option.text) };
     },
 
-    // 三层回读。模型层（React fiber / Vue）按 pending 100 的决定只作参考，不单独否决：
+    // 三层回读。模型层（React fiber / Vue）只作参考，不单独否决：
     // 从 root.current 往下找 stateNode 是这个元素的 fiber 才是活动分支——节点上挂的那个
     // __reactFiber$ 在奇数次提交后指向旧分支，直接读它会把写对的值判成没写进去。
     readback(handle, displaySelector) {

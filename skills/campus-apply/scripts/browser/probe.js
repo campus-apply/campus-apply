@@ -8,7 +8,7 @@
 // 用 valueFrom 说明读自哪一层；三层都拿不到就报 valueUnknown，不报长度 0。
 (() => {
   // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
-  // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
+  // 下拉面板基本都是 fixed，拿它判会整类漏掉。
   // 优先用 checkVisibility（Chrome 105+ 一次把 display / visibility / opacity / content-visibility 都算上），
   // 老浏览器退回"有布局盒子 + 没被 display:none / visibility:hidden"。
   const vis = el => {
@@ -86,7 +86,7 @@
     const valueUnknown = got === null;
     const val = got ? got[1] : '';
     const valueFrom = got ? got[0] : null;
-    // maxlength 属性基本只出现在真文本框上；有它的多半不是下拉（#112）
+    // maxlength 属性基本只出现在真文本框上；有它的多半不是下拉
     if (k === 'text' && !el.getAttribute('maxlength')
         && (hasPopup || dispText || (hasCaret && (el.readOnly || !val)))) k = 'dropdown?';
     // 敏感字段：标签、属性名、值的形态三路判断，标签为空的手机框也要认出来
@@ -106,7 +106,7 @@
       valuePreview: valueUnknown ? null : (secret ? (val ? '【已隐藏】' : '') : val.slice(0, 30)),
       tag: box.tagName.toLowerCase(), cls: String(box.className || '').slice(0, 80),
       // 字段容器的 class 常常自带控件类型线索（后缀 -Select- / date_info / string_info 之类）。
-      // 只把线索带回来交给模型认，不在这里硬编码任何站点的后缀表（#112）。
+      // 只把线索带回来交给模型认，不在这里硬编码任何站点的后缀表。
       wrapCls: wrap === box ? '' : String(wrap.className || '').slice(0, 80) });
   }
   const headings = [...new Set([...document.querySelectorAll('h1,h2,h3,h4,[class*="title"],[class*="header"]')].filter(vis).map(h => clean(h.innerText)).filter(t => t && t.length < 40))].slice(0, 60);

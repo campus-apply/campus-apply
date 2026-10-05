@@ -2,7 +2,7 @@
 // 单独注入时返回 JSON 字符串；作为 LIBS 引入时 stage 可调用 window.__caGuard()。
 window.__caGuard = function () {
   // 可见性：不用 offsetParent —— 它对 position:fixed 的元素恒为假，而真实站点的遮罩、弹窗和
-  // 下拉面板基本都是 fixed，拿它判会整类漏掉（2026-10-04 实测，待处理 105）。
+  // 下拉面板基本都是 fixed，拿它判会整类漏掉。
   // 优先用 checkVisibility（Chrome 105+ 一次把 display / visibility / opacity / content-visibility 都算上），
   // 老浏览器退回"有布局盒子 + 没被 display:none / visibility:hidden"。
   const vis = el => {
@@ -34,9 +34,9 @@ window.__caGuard = function () {
   const identityWords = ['退出登录', '安全退出', '我的简历', '我的投递', '我的申请', '个人中心', '账号设置']
     .filter(k => text.includes(k));
   const loggedIn = identityHits.length > 0 || identityWords.length > 0;
-  // 弹窗：按通用词找候选，不枚举框架（美团 mtd-modal、antd ant-modal-wrap、Element
-  // el-dialog__wrapper、自定义 xx-mask 都要认；只枚举框架前缀换个站就漏，2026-10-04 实测漏过
-  // mtd-confirm common_modal）。但光靠 class 含 "modal" 会把"打开弹窗"按钮、带 dialog 的说明
+  // 弹窗：按通用词找候选，不枚举框架（antd 的 ant-modal-wrap、Element 的
+  // el-dialog__wrapper、自定义 xx-mask 都要认；只枚举框架前缀，换个站就漏）。
+  // 但光靠 class 含 "modal" 会把"打开弹窗"按钮、带 dialog 的说明
   // 文字都算进来，所以候选还要满足弹窗的形状：脱离文档流（fixed / absolute 定位或 <dialog>）
   // 且足够大（占视口两成以上宽高，或超过 200×120）。可见性判定见上面的 vis。
   const modalShape = el => {

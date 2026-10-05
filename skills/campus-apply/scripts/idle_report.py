@@ -75,7 +75,7 @@ def main(argv=None):
         return 2
     report = summarise(rows)
     if report is None:
-        print('这个文件里没有带时间戳的记录（旧版本只在 stage 里记，换新版本重跑一次）')
+        print('这个文件里没有带墙钟时间戳的记录，算不出命令之间的空当')
         return 1
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=1))
