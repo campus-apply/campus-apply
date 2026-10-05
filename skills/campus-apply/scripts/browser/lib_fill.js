@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 5;
+  const VERSION = 6;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -75,18 +75,24 @@
     return false;
   };
 
-  // 点下去会把人带离这一页吗。**不是"什么不是控件"的淘汰规则**，而是"点它的代价
-  // 不可逆"——页面一跳走，填到一半的表单和这一轮的 handle 全废。所以不从候选里删，
-  // 只打标记，由调用方决定（probe-options 不点，agent 看得到）。
-  // 判据是不变量：<a href> 带非锚点地址，是 W3C 对"离开本页"的标准表达。
-  // 注意它拦不住 JS 路由（实测那个站的导航就是 <li> + JS 路由，没有 href），
-  // 所以它只是一道附加保险，真正挡住导航的是下面的"旁边有没有标签"。
+  // 点下去会把人带离这一页、或者打开一层新内容吗。**不是"什么不是控件"的淘汰规则**，
+  // 而是"点它的代价不是填一个值"——页面一跳走，填到一半的表单和这一轮的 handle 全废；
+  // 弹一层模态框则会挡住后面所有控件（实测连报七八个 covered）。
+  // 所以不从候选里删，只打标记，由调用方决定（probe-options 不自动点，--only 点名照探）。
+  //
+  // 判据用 W3C 语义而不是从某个站反推：
+  //   <a href> 指向别处  —— 标准的"离开本页"
+  //   <a> 本身           —— 链接的语义就是"导航或打开新内容"，和"填一个值进去"是两回事。
+  //                         实测某站的"申请须知"是 <a> 但**没有 href**（JS 开弹窗），
+  //                         只看 href 拦不住它；而按 <a> 这个标签名拦就拦住了，
+  //                         它仍留在报告里，agent 确认是下拉触发器就用 --only 点名探。
   const navigatesAway = el => {
-    const a = el.closest('a[href]');
+    const a = el.closest('a');
     if (!a) return false;
-    const href = a.getAttribute('href') || '';
-    if (!href || href.startsWith('#')) return false;
-    if (/^javascript:/i.test(href)) return false;
+    const href = a.getAttribute('href');
+    if (href === null) return true;                    // <a> 无 href：JS 开弹窗或路由
+    if (!href || href.startsWith('#')) return false;   // 页内锚点不算离开
+    if (/^javascript:/i.test(href)) return true;       // 明摆着是 JS 行为
     return a.href !== location.href;
   };
 
