@@ -1592,15 +1592,33 @@ def cmd_probe_options(out_path, only=None):
             candidates = _panel_candidates(tab, f['handle'], 2.0)
             panel, why, likely = _pick_panel(candidates)
             if panel is None and why == 'ambiguous':
+                # 认不准哪个是面板**不等于读不到里面有什么**。面板这会儿还开着，
+                # 先把每个候选的完整选项表读出来，再收面板——原来是先收后报，
+                # 于是 agent 只拿到 sampleTexts 的前四项，想用也没法用，
+                # 只能再跑一次 --only，而再跑一次照样 ambiguous，死循环。
+                #
+                # 读完整选项不是在替 agent 下结论：候选还是原样交出去、一条都不淘汰，
+                # 只是每条都带上"它里面到底有哪些选项"。真站上两条候选常常是同一个面板
+                # 被 MutationObserver 记了两次（新增节点 + 属性变化各一条），选项表
+                # 一模一样——这个事实本身就够 agent 判断了，比我们再加一条判据可靠。
+                for c in likely[:4]:
+                    try:
+                        c['options'] = _fill_call(
+                            tab, 'window.__caFill.optionsIn(%d)' % c['handle']) or []
+                    except TabError:
+                        c['options'] = []
                 _close_panels(tab, f['handle'], 2.0, learned)
                 out.append(dict(key=key, label=f['label'], kind='unsure',
-                                note='认不准哪个是面板，没动它。候选见 candidates，'
-                                     '确认后用 --only 单独探这个字段，或在计划里直接给值',
-                                candidates=[dict(cls=c['cls'], score=c['score'],
+                                note='认不准哪个是面板，没动它。候选连选项表见 candidates——'
+                                     '几条候选的 options 完全一样就是同一个面板被记了多次，'
+                                     '挑一条的 options 直接写进计划即可；真分不清就截图看',
+                                candidates=[dict(handle=c['handle'], cls=c['cls'],
+                                                 score=c['score'],
                                                  optionCount=c['optionCount'],
                                                  floating=c['floating'],
                                                  gapBelow=c['gapBelow'],
-                                                 sampleTexts=c['sampleTexts'])
+                                                 sampleTexts=c['sampleTexts'],
+                                                 options=c.get('options') or [])
                                             for c in likely[:4]]))
                 unsure += 1
                 continue
