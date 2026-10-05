@@ -1408,12 +1408,34 @@ def cmd_probe_options(out_path, only=None):
                                 note='点了没出现面板，多半是普通文本框'))
                 continue
             opts = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % panel['handle']) or []
+            # 选一个值看页面会不会多出字段：有的字段是选了某项才出现的（选了语言才出现
+            # 考试和分数），不在这里触发出来，它们在整页计划里就是缺的，填完一轮才发现。
+            revealed = []
+            if opts and not f['valueLen']:
+                before = {(x['section'], x['occurrence'], x['label'], x['nth'])
+                          for x in _fill_call(tab, 'window.__caFill.outline()')['fields']}
+                picked = _fill_call(tab, 'window.__caFill.option(%d, %s, true)'
+                                    % (panel['handle'], json.dumps(opts[0])))
+                if picked and picked.get('handle'):
+                    try:
+                        _real_click(tab, picked['handle'])
+                        time.sleep(0.3)
+                        after = _fill_call(tab, 'window.__caFill.outline()')['fields']
+                        revealed = [dict(section=x['section'], occurrence=x['occurrence'],
+                                         label=x['label'], nth=x['nth'], tag=x['tag'])
+                                    for x in after
+                                    if (x['section'], x['occurrence'],
+                                        x['label'], x['nth']) not in before]
+                    except TabError:
+                        pass
             how, closed = _close_panels(tab, f['handle'], 2.0, learned)
             if how in CLOSE_TRICKS:
                 learned = how
             out.append(dict(key=key, label=f['label'],
                             kind='search' if f['maxlength'] else 'dropdown',
                             options=opts[:200], count=len(opts),
+                            probed_with=opts[0] if revealed else None,
+                            revealed=revealed,
                             closed_by=how, closed=closed))
             if not closed:
                 print(f'STOP 「{f["label"]}」的面板收不起来，先停下，不再往下探')
@@ -1437,6 +1459,14 @@ def cmd_probe_options(out_path, only=None):
             else:
                 print(f"{row['label']}\t{row.get('note') or row.get('skipped') or row.get('error')}")
         print('---')
+        extra = [r for r in out if r.get('revealed')]
+        for row in extra:
+            print(f"选「{row['label']}」= {row['probed_with']} 之后多出 "
+                  + '、'.join(x['label'] or '(无标签)' for x in row['revealed'])
+                  + '  ← 这些字段要一起填，别漏')
+        if extra:
+            print('注意：上面这些是条件字段，探测时选的值已经留在控件里，'
+                  '填写时要按真实值重写一遍')
         print(f'OPTIONS {len(out)} 个控件探过'
               + (f'，收面板用的是 {learned}' if learned else '')
               + f' → {out_path}')
