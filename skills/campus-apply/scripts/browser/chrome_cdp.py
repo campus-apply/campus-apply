@@ -1574,8 +1574,23 @@ def cmd_probe_options(out_path, only=None):
                 unsure += 1
                 continue
             if panel is None:
-                out.append(dict(key=key, label=f['label'], kind='text?',
-                                note='点了没出现面板，多半是普通文本框'))
+                # 挑不出来的时候**把候选连判据一起吐出来，一条都不淘汰**。
+                # 绝大多数情况这里确实是普通文本框（candidates 为空），报一句就够；
+                # 但点出了东西却没有一个够像时，判据各自是什么值才是唯一能定位的证据——
+                # 2026-10-06 真站上 27 个控件全探不到选项，就是因为这一支把证据丢了。
+                row = dict(key=key, label=f['label'], kind='text?',
+                           note='点了没出现面板，多半是普通文本框')
+                if candidates:
+                    row['note'] = ('点出了 %d 个候选，但没有一个同时满足'
+                                   '"有可点选项"和"是浮层"；候选连判据见 candidates'
+                                   % len(candidates))
+                    row['candidates'] = [dict(cls=c.get('cls'), score=c.get('score'),
+                                              optionCount=c.get('optionCount'),
+                                              floating=c.get('floating'),
+                                              gapBelow=c.get('gapBelow'),
+                                              sampleTexts=c.get('sampleTexts'))
+                                         for c in candidates[:6]]
+                out.append(row)
                 continue
             _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)'
                        % (f['handle'], panel['handle']))
