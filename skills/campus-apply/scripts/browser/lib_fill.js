@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 3;
+  const VERSION = 5;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -852,6 +852,31 @@
         // （点出来一个面板选，但选中的值回填进 input.value，页面上没有单独的显示节点）。
         // 不回落的话这类字段永远回读不过——而值明明已经填对了，报出来却是"显示值读到 None"。
         if (display === null && typeof dom === 'string' && dom !== '') display = dom;
+        // 纯 div 实现的控件（没有 input，值就是控件内的那段文字）。
+        // 上面那张 DISP 是 class 名单，命中不了自研组件库的命名——实测某站的值元素叫
+        // `brick-select-selection-value`，四个词一个都不沾。而**控件自己显示出来的文字
+        // 就是用户看到的值**，这是结构事实，不依赖它叫什么 class。
+        // 不加这一条，这类字段写进去了也回读不出来，报"回读不一致"——又一次把
+        // "我读不出来"说成"它没填上"。
+        //
+        // 但不能直接取 el.innerText：控件里还有装饰节点（下拉箭头 ⌄、清空叉、单位后缀），
+        // 整块取会读成"硕士 ⌄"，和"硕士"比不相等。值和装饰在 DOM 里是分开的叶子，
+        // 所以按叶子收、**挑最长的那个**——值是用户要读的信息，装饰是一两个符号。
+        if (display === null && dom === null) {
+          const leaves = [];
+          for (const node of el.querySelectorAll('*')) {
+            if (node.children.length) continue;
+            if (!visible(node)) continue;
+            const t = clean(node.innerText);
+            if (t) leaves.push(t);
+          }
+          if (leaves.length) {
+            display = leaves.reduce((a, b) => (b.length > a.length ? b : a));
+          } else {
+            const own = clean(el.innerText);     // 值直接挂在控件身上、没有子节点
+            if (own) display = own;
+          }
+        }
       }
       return { dom, display, model: api.modelValue(handle) };
     },
