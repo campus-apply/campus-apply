@@ -91,7 +91,8 @@ class BrowserSession:
         return self.cdp._fill_call(self.tab, expression)
 
     def document(self, html):
-        self.js("document.body.innerHTML = " + json.dumps(html) + "; delete window.__caFill;")
+        self.js("document.head.innerHTML = '<meta charset=utf-8>'; document.body.innerHTML = "
+                + json.dumps(html) + "; delete window.__caFill;")
         self.js(self.cdp._fill_lib())
 
     def screenshot(self, name):

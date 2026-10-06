@@ -880,7 +880,9 @@ def _panel_failure(tab, handle, record, reason, candidates, want, display_select
         record.update(closed_by=None, panel_left_open=None, panel_status_unknown=True)
     else:
         how, closed = _close_panels(tab, handle, budget, learned)
-        record.update(closed_by=how, panel_left_open=not closed)
+        record.update(closed_by=how, panel_left_open=None if closed is None else not closed)
+        if closed is None:
+            record.update(panel_status_unknown=True, close_candidates=getattr(tab, "close_candidates", []))
     record['readback'] = _verify(tab, handle, want, display_selector, kind)
     record['why'] = {
         'ambiguous-panel': '面板候选不唯一，未自动选定；请主动截图并按证据指定 panel_selector',
@@ -905,10 +907,14 @@ def _panel_closed_within(tab, handle, budget=0.4):
     瞬时查一次会把"正在收"读成"没收掉"，于是一招接一招地试下去，最后判成收不起来——
     真实站点上第一个延迟收的下拉就会卡住整轮探测。budget 用完仍在就是真没收掉。
     """
-    expr = 'window.__caFill.stillOpen()'
-    closed, _ = _wait_for(tab, expr,
-                          lambda v: not any(p.get('field') == handle for p in (v or [])),
+    expr = ('({fresh: window.__caFill.appeared(%d), still: window.__caFill.stillOpen()})' % handle)
+    closed, evidence = _wait_for(tab, expr,
+                          lambda v: not any(p.get('field') == handle for p in ((v or {}).get('still') or [])),
                           budget)
+    fresh = [c for c in (evidence or {}).get('fresh') or [] if c.get('optionCount')]
+    if closed and fresh:
+        tab.close_candidates = _candidate_evidence(tab, fresh)
+        return None  # 旧对象不见、新候选出现；不猜新候选是不是原面板。
     return closed
 
 
@@ -943,10 +949,15 @@ def _close_panels(tab, handle, budget, learned=None):
         order.insert(0, learned)
     for name in order:
         try:
+            _fill_call(tab, 'window.__caFill.watchStart()')
             actions[name]()
         except TabError:
             continue
-        if _panel_closed_within(tab, handle, per_trick):
+        closed = _panel_closed_within(tab, handle, per_trick)
+        _fill_call(tab, 'window.__caFill.watchStop()')
+        if closed is None:
+            return 'changed-candidates', None
+        if closed:
             _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
             return name, True
     return 'none', False
@@ -1037,6 +1048,15 @@ def _verify(tab, handle, want, display_selector, kind):
     back = _fill_call(tab, 'window.__caFill.readback(%d, %s)'
                       % (handle, json.dumps(display_selector) if display_selector else 'null'))
     errors = _fill_call(tab, f'window.__caFill.errors({handle})') or []
+    if back.get('masked'):
+        matched = _fill_call(tab, 'window.__caFill.compareKnownValue(%d, %s, %s)' %
+                            (handle, json.dumps(want), json.dumps(display_selector))) or {}
+        visible_ok = (True if kind == 'checkbox' else matched.get(
+            'display_match' if kind in ('dropdown','search','cascader','date') else 'dom_match', False))
+        return dict(ok=bool(visible_ok) and not errors, visible_ok=bool(visible_ok),
+                    model_found=False, model_ok=True, model_via='private-masked',
+                    dom_len=back.get('value_len'), display='【已隐藏】', errors=errors,
+                    selected_index=back.get('selected_index'), masked=True)
     dom, display, model = back.get('dom'), back.get('display'), back.get('model') or {}
     if kind in ('dropdown', 'search', 'cascader', 'date'):
         visible_ok = display == want                        # 这些控件的值在显示元素上，input.value 常常是空的
@@ -1044,11 +1064,15 @@ def _verify(tab, handle, want, display_selector, kind):
         visible_ok = True                                   # toggle 自己回读过
     else:
         visible_ok = dom == want
+    if back.get('display_unknown') and (display_selector or kind in ('dropdown','search','cascader','date')):
+        visible_ok = False
     model_ok = (not model.get('found')) or model.get('value') == want
     return dict(ok=bool(visible_ok) and not errors, visible_ok=bool(visible_ok),
                 model_found=bool(model.get('found')), model_ok=bool(model_ok),
                 model_via=model.get('via'), dom_len=len(dom) if isinstance(dom, str) else None,
-                display=display, errors=errors, selected_index=back.get('selected_index'))
+                display=display, errors=errors, selected_index=back.get('selected_index'),
+                display_source=back.get('display_source'), display_unknown=back.get('display_unknown', False),
+                display_candidates=back.get('display_candidates') or [])
 
 
 def _fill_one(tab, item, waits, learned=None):
@@ -1109,7 +1133,7 @@ def _fill_one(tab, item, waits, learned=None):
         record['why'] = (f'控件身份校验不通过：计划期望名称含「{expect}」，'
                          f'实到「{ident.get("name")}」，没有动它')
         return False, record
-    if ident.get('sensitive') and not item.get('sensitive_ok'):
+    if ident.get('hard_sensitive') or ident.get('sensitive') and not item.get('sensitive_ok'):
         # 算失败不算跳过：skipped 是"客观写不进"（账号级 disabled 字段），
         # 这里是计划明确要求了而我们拒绝执行，调用方必须知道这个字段没写成。
         record['why'] = (f'敏感字段（「{ident.get("name")}」）不写入；'
@@ -1220,7 +1244,9 @@ def _fill_one(tab, item, waits, learned=None):
                     record['why'] = (f'第 {depth + 1} 级没有「{step}」'
                                      + ('，面板里有：' + '、'.join(available[:12]) if available else ''))
                     how, closed = _close_panels(tab, handle, waits['panel'], learned)
-                    record.update(closed_by=how, panel_left_open=not closed)
+                    record.update(closed_by=how, panel_left_open=None if closed is None else not closed)
+                    if closed is None:
+                        record.update(panel_status_unknown=True, close_candidates=getattr(tab, 'close_candidates', []))
                     record['readback'] = _verify(tab, handle, item.get('display', want),
                                                  item.get('display_selector'), kind)
                     return False, record
@@ -1249,8 +1275,12 @@ def _fill_one(tab, item, waits, learned=None):
                             _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
             how, closed = _close_panels(tab, handle, waits['panel'], learned)
             record['closed_by'] = how
-            record['panel_left_open'] = not closed
-            record['panel_left_open'] = not closed
+            record['panel_left_open'] = None if closed is None else not closed
+            if closed is None:
+                record.update(panel_status_unknown=True, close_candidates=getattr(tab, 'close_candidates', []))
+            record['panel_left_open'] = None if closed is None else not closed
+            if closed is None:
+                record.update(panel_status_unknown=True, close_candidates=getattr(tab, 'close_candidates', []))
             # 面板收不掉**不等于**值没写进去：上面已经点中了选项，值多半已经落地。
             # 原来这里直接 return False 跳过回读，于是报告说"没动它"而页面上有值——
             # 阿里实测两个字段这么写进去的，其中一个还是错值（计划要硕士，页面显示博士），
@@ -1271,9 +1301,16 @@ def _fill_one(tab, item, waits, learned=None):
     if expected_index is not None and check.get('selected_index') != expected_index:
         check['ok'] = False
     if not check['ok']:
+        if check.get('display_unknown'):
+            record.update(reason='needs-display-choice',
+                          why='显示值来源未确定，未猜哪个文本是值；请主动截图并指定display_selector，先只读验证已执行结果')
+            return False, record
         record['why'] = ('回读不一致：显示/DOM 读到 '
                          + repr(check['display'] if kind != 'text' else check['dom_len'])
                          + (('；页面报错：' + '、'.join(check['errors'])) if check['errors'] else ''))
+        return False, record
+    if record.get('panel_status_unknown'):
+        record['why'] = '已执行结果见回读，但关闭后出现新候选；主动截图确认，未宣称面板已关闭'
         return False, record
     if record.get('panel_left_open'):
         # 值对了但面板还开着：仍然算没做完（开着的面板会盖住后面的字段，下一个字段会连环失败），
@@ -1288,6 +1325,14 @@ def _uses_selector_addressing(item):
     """这一条是不是走 selector + index。判据和执行时的分流保持一致：给了 selector 就按
     selector 走，语义坐标也在也不改路——所以门禁要拦的就是"有 selector"这一个条件。"""
     return bool(item.get('selector'))
+
+
+def _field_structure(tab):
+    """观察当前字段节点与语义坐标；节点换了不猜原计划的含义仍相同。"""
+    fields = _fill_call(tab, 'window.__caFill.outline()')['fields']
+    return {tuple(f.get(k) for k in ('section','occurrence','label','nth','handle','tag','type')):
+            {k:f.get(k) for k in ('section','occurrence','label','nth','handle','tag','type')}
+            for f in fields}
 
 
 def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
@@ -1405,13 +1450,14 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')
             return 1
-        records, filled, learned = [], 0, None
+        records, filled, learned, changes = [], 0, None, []
         for index, item in enumerate(items):
             if time.monotonic() >= deadline:
                 records.append(dict(key=item.get('key') or item.get('selector'), status='not-started',
                                     why=f'到了 {max_seconds:g} 秒预算，这个字段没开始'))
                 continue
             try:
+                before = _field_structure(tab)
                 ok, record = _fill_one(tab, item, waits, learned)
             except TabError as e:
                 ok, record = False, dict(key=item.get('key') or item.get('selector'),
@@ -1428,6 +1474,18 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
                                for later in items[index + 1:])
                 break
             time.sleep(random.uniform(lo, hi))              # 字段间留间隔，节奏照 skill 的两档规矩
+            if record.get('status') == 'filled':
+                after = _field_structure(tab)
+                if before.keys() != after.keys():
+                    change = dict(after_field=record['key'],
+                                  added=[after[k] for k in after.keys() - before.keys()],
+                                  removed=[before[k] for k in before.keys() - after.keys()])
+                    changes.append(change)
+                    record['structure_change'] = change
+                    records.extend(dict(key=later.get('key') or later.get('label') or later.get('selector'),
+                                        status='not-started', why='字段节点或集合已变化，先交回agent重新观察')
+                                   for later in items[index + 1:])
+                    break
         # 收尾的只读检查不能把账本烧掉：页面在填写期间导航过的话 window.__caFill 随旧文档消失，
         # 这一行会抛异常。先把逐字段报告打出去，再报告上下文丢了。
         lost, still = None, []
@@ -1439,7 +1497,8 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
         report = dict(plan=os.path.basename(plan_path), total=len(items), filled=filled,
                       open_panels=left, open_panel_fields=[p.get('field') for p in still],
                       close_trick=learned, context_lost=lost,
-                      elapsed_seconds=round(time.monotonic() - started, 3), fields=records)
+                      elapsed_seconds=round(time.monotonic() - started, 3), fields=records,
+                      needs_observation=bool(changes), structure_changes=changes)
         for r in records:
             mark = {'filled': 'OK  ', 'skipped': 'SKIP', 'not-started': '----'}.get(r['status'], 'FAIL')
             print(f"{mark} {r.get('label') or r.get('key')}"
@@ -1453,6 +1512,9 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
             return 1
         if left:
             print(f'ERR_PANELS 我们开的面板还有 {left} 个没收掉')
+            return 1
+        if changes:
+            print('OBSERVE 字段节点或集合已变化：已执行结果保留，剩余计划未执行；agent先survey/主动截图，再补增量计划')
             return 1
         if bad:
             print(f'ERR_FILL {len(bad)}/{len(items)} 个字段没填成')
@@ -1777,11 +1839,9 @@ def cmd_probe_options(out_path, only=None):
             #
             # `--only` 指名要探的除外——那正是 agent 在点名，这条命令本来就是
             # "agent 看完证据之后回来探这一个"的入口，不该再拦它。
-            if not f.get('native') and not wanted:
+            if f['tag'] != 'select' and not wanted:
                 out.append(dict(key=key, label=f['label'], kind='needs-agent',
-                                note='非原生控件（没有 input/textarea/select，靠 cursor:pointer '
-                                     '和标签位置认出来的），自动探测不点它。证据见 evidence，'
-                                     '确认是下拉就用 --only 单独探这个字段',
+                                note='这次仅提供控件证据，没有点击。agent确认目标和操作后用 --only 点名读取选项；看不清主动截图',
                                 evidence=dict(tag=f.get('tag'),
                                               cursor=f.get('cursor'), role=f.get('role'),
                                               labels=f.get('labels'))))
@@ -1791,9 +1851,6 @@ def cmd_probe_options(out_path, only=None):
                 opts = [o['label'] for o in native_options]
                 out.append(dict(key=key, label=f['label'], kind='native-select',
                                 options=opts, native_options=native_options, count=len(opts)))
-                continue
-            if f['valueLen']:
-                out.append(dict(key=key, label=f['label'], skipped='这个字段已经有值，没有去点它'))
                 continue
             _fill_call(tab, 'window.__caFill.watchStart()')
             try:
@@ -1833,6 +1890,7 @@ def cmd_probe_options(out_path, only=None):
                            note='当前不能自动选定面板；完整候选见 candidates。'
                                 '看不清就主动截图，由 agent 指定目标，不按文字表相等合并身份。',
                            candidates=evidence, closed_by=how, closed=closed,
+                           panel_status_unknown=closed is None, close_candidates=getattr(tab, 'close_candidates', []),
                            actions=['opened-control'])
                 out.append(row)
                 unsure += 1 if candidates else 0
@@ -1845,40 +1903,22 @@ def cmd_probe_options(out_path, only=None):
             # 面板里并排几组选项：两组以上是多级控件（年份一列 + 月份一格），计划要写 cascader。
             # 按结构数，不按 class 猜——猜错了 kind，计划走的就是另一条执行路径。
             groups = _fill_call(tab, 'window.__caFill.optionGroups(%d)' % panel['handle']) or 0
-            # 选一个值看页面会不会多出字段：有的字段是选了某项才出现的（选了语言才出现
-            # 考试和分数），不在这里触发出来，它们在整页计划里就是缺的，填完一轮才发现。
+            # 只读取现场选项，不替agent选择任何分支。
             revealed = []
-            if opts and not f['valueLen']:
-                before = {(x['section'], x['occurrence'], x['label'], x['nth'])
-                          for x in _fill_call(tab, 'window.__caFill.outline()')['fields']}
-                picked = _fill_call(tab, 'window.__caFill.option(%d, %s, true)'
-                                    % (panel['handle'], json.dumps(opts[0])))
-                if picked and picked.get('handle'):
-                    try:
-                        _real_click(tab, picked['handle'])
-                        time.sleep(0.3)
-                        after = _fill_call(tab, 'window.__caFill.outline()')['fields']
-                        revealed = [dict(section=x['section'], occurrence=x['occurrence'],
-                                         label=x['label'], nth=x['nth'], tag=x['tag'])
-                                    for x in after
-                                    if (x['section'], x['occurrence'],
-                                        x['label'], x['nth']) not in before]
-                    except TabError:
-                        pass
             how, closed = _close_panels(tab, f['handle'], 2.0, learned)
             if how in CLOSE_TRICKS:
                 learned = how
             out.append(dict(key=key, label=f['label'],
-                            kind=('cascader' if groups >= 2
-                                  else 'search' if f['maxlength'] else 'dropdown'),
+                            kind='options-observed', kind_hint='grouped-options' if groups >= 2 else 'options',
                             option_groups=groups,
                             # 面板是哪个节点。读不出选项时这是唯一能查下去的线索——
                             # 没有它，每次真站上遇到就得现场重新装观察器复现一遍。
                             panel=panel.get('cls', '')[:60],
-                            options=opts[:200], count=len(opts),
-                            probed_with=opts[0] if revealed else None,
+                            options=opts, count=len(opts),
+                            branch_selected=False, probed_with=None,
                             revealed=revealed,
-                            closed_by=how, closed=closed))
+                            closed_by=how, closed=closed, panel_status_unknown=closed is None,
+                            close_candidates=getattr(tab, 'close_candidates', [])))
             if not closed:
                 print(f'STOP 「{f["label"]}」的面板收不起来，先停下，不再往下探')
                 break
@@ -1910,7 +1950,7 @@ def cmd_probe_options(out_path, only=None):
             print('注意：上面这些是条件字段，探测时选的值已经留在控件里，'
                   '填写时要按真实值重写一遍')
         print(f'OPTIONS {len(out)} 个控件探过'
-              + (f'，其中 {unsure} 个认不准、没动它' if unsure else '')
+              + (f'，其中 {unsure} 个待agent判断、没有试选值' if unsure else '')
               + (f'，收面板用的是 {learned}' if learned else '')
               + f' → {out_path}')
         if unsure:
@@ -1918,6 +1958,9 @@ def cmd_probe_options(out_path, only=None):
                   '和证据（optionCount / floating / gapBelow / sampleTexts）——')
             print('  看一眼就能定的话，用 --only 单独探它；拿不准就截一张图'
                   '（screenshot）看看那个控件点开长什么样，别猜。')
+        if any(r.get('panel_status_unknown') for r in out):
+            print('OBSERVE 关闭动作后出现新候选，不能凭旧节点消失宣称关闭；请主动截图并看close_candidates')
+            return 1
         if still:
             print(f'ERR_PANELS 我们开的面板还有 {len(still)} 个没收掉')
             return 1

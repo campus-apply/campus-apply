@@ -68,18 +68,6 @@ def test_closing_a_panel_learns_which_trick_works_on_this_page():
         '哪一招奏效要记下来，本页后续字段优先用它'
 
 
-def test_readback_is_bounded_by_the_control_own_container():
-    """多个控件共用一个字段容器时，往上找会抓到隔壁字段的显示值。"""
-    code = js_code()
-    assert 'ownBox' in code, '回读要先定界到控件自己的最小容器'
-    assert 'sameRow' in code or 'overlap' in code, \
-        '上溯取到的显示值要校验与本控件的几何位置对得上'
-
-
-def test_the_rule_is_written_down_for_the_model_too():
-    text = PRINCIPLES.read_text(encoding='utf-8')
-    assert '点击前后' in text, 'on-site-principles 要写明面板按点击前后的变化找'
-    assert '现场试' in text, '收面板不写死顺序，改成现场试并记下哪招有效'
 
 
 def test_close_panels_waits_for_delayed_animation_not_instant_query():

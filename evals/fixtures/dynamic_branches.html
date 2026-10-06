@@ -1,0 +1,41 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>虚构网申：真实选择后的新字段</title>
+<style>
+body{font:16px/1.6 system-ui;padding:24px;max-width:760px}label{display:block;margin-top:14px}
+input{width:270px;height:32px}.choices{position:absolute;z-index:10;background:white;border:1px solid #bbb;padding:8px;min-width:250px}
+.pick{display:block;min-height:32px;padding:4px 10px;cursor:pointer}
+</style>
+<h1>虚构语言资料</h1><p>先观察当前字段，真实选择后再看新增要求。本页不会发送任何投递。</p>
+<label for="common">保留资料</label><input id="common" value="不应覆盖">
+<label for="language">语言类型</label><input id="language" readonly>
+<div id="dependent"><label for="note">说明</label><input id="note" value="已有中文说明" placeholder="中文分支说明"></div>
+<script>
+(() => {
+const params=new URLSearchParams(location.search);
+const language=document.getElementById('language'),audit={opened:0,selected:[],changed:[]};
+if(params.get('existing')==='1')language.value='中文';
+const menu=(field,values,onSelect)=>{
+  const old=document.querySelector('.choices');if(old){old.remove();return;}
+  audit.opened++;const box=document.createElement('div');box.className='choices';box.id='menu-'+field.id;
+  const rect=field.getBoundingClientRect();box.style.left=rect.left+'px';box.style.top=(rect.bottom+scrollY+3)+'px';
+  values.forEach(value=>{
+    const item=document.createElement('span');item.className='pick';item.textContent=value;
+    item.onclick=e=>{e.stopPropagation();audit.selected.push({field:field.id,value});field.value=value;box.remove();onSelect(value);};
+    box.append(item);
+  });document.body.append(box);
+};
+language.onclick=()=>menu(language,['中文','英语'],value=>{
+  if(value!=='英语')return;
+  // 同名同坐标字段换了实际节点与适用范围，不能继续写旧分支的计划。
+  document.getElementById('dependent').innerHTML='<label for="note">说明</label><input id="note" placeholder="英语分支说明">';
+  if(params.get('replacement_only')==='1')return;
+  document.getElementById('dependent').insertAdjacentHTML('beforeend','<label for="exam">语言考试</label><input id="exam" readonly>');
+  document.getElementById('exam').onclick=()=>menu(document.getElementById('exam'),['CET-6','TEM-8'],choice=>{
+    if(choice!=='CET-6')return;
+    if(!document.getElementById('score'))document.getElementById('dependent').insertAdjacentHTML('beforeend','<label for="score">考试分数</label><input id="score" maxlength="3">');
+  });
+});
+document.addEventListener('input',e=>{if(e.target.id)audit.changed.push(e.target.id);});
+window.fixtureTruth=()=>Object.fromEntries([...document.querySelectorAll('input')].map(e=>[e.id,e.value]));
+window.fixtureAudit=()=>({...audit,selected:[...audit.selected],changed:[...audit.changed],openPanels:document.querySelectorAll('.choices').length});
+})();
+</script></html>

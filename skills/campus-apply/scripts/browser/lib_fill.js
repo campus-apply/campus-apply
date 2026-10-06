@@ -212,7 +212,8 @@
     }
     // 2) 控件内部的文字。**单独标出来**：它可能是占位符（"请选择"），也可能是已选中的
     //    值（"中国"），两者都不是字段标签。混进 label 正是那个站的毛病来源。
-    const inner = clean(el.innerText || el.value || '');
+    // 控件当前输入值不是标签；不把它复制进标签证据。
+    const inner = isSensitive(el) ? '' : clean(el.innerText || '');
     if (inner) ev.innerText = inner.slice(0, 60);
     const ph = el.getAttribute && el.getAttribute('placeholder');
     if (ph) ev.placeholder = clean(ph).slice(0, 60);
@@ -341,9 +342,14 @@
   // 写错一个下标就会操作到完全无关的控件，而这几类字段恰好排在表单最前面（索引 0 附近）。
   // 命中就拒绝写入和点击，除非计划里为这个字段显式写了 sensitive_ok。
   const SENSITIVE = /证件|身份证|护照|军官证|港澳|台胞|密码|password|验证码|captcha|银行卡|开户|账号|card|出生|生日|birth/i;
-  const isSensitive = el => SENSITIVE.test(nameOf(el) + ' '
+  const isPassword = el => el.tagName === 'INPUT' && el.type === 'password';
+  const isSensitive = el => isPassword(el) || SENSITIVE.test(nameOf(el) + ' '
     + ['name', 'id', 'placeholder', 'autocomplete', 'aria-label']
         .map(a => el.getAttribute && el.getAttribute(a) || '').join(' '));
+  const privateRead = el => isSensitive(el)
+    || el.tagName === 'INPUT' && (el.type === 'tel' || el.type === 'email')
+    || /手机|电话|phone|mobile|邮箱|email|mail/i.test(nameOf(el) + ' '
+      + ['name','id','autocomplete'].map(a => el.getAttribute && el.getAttribute(a) || '').join(' '));
 
   const register = el => {
     for (const [id, known] of store) if (known === el) return id;
@@ -600,7 +606,7 @@
     identify(handle) {
       const el = get(handle);
       if (!el) return { error: 'gone' };
-      return { name: describeLabel(el).label, sensitive: isSensitive(el) };
+      return { name: describeLabel(el).label, sensitive: isSensitive(el), hard_sensitive: isPassword(el) };
     },
 
     // probe、outline和执行前身份校验共享同一份标签证据。
@@ -709,6 +715,7 @@
 
     // 开始盯着页面的变化。点开面板之前调一次。
     watchStart() { watchStart(); return true; },
+    watchStop() { watchStop(); return true; },
 
     // 取这一轮点击之后新出现的候选，按"更像面板"排序后返回。排序只影响先试哪个，
     // 不会把任何候选排除掉——某个站的面板既不在输入框上方也不在下方，而是盖在它身上。
@@ -964,7 +971,6 @@
         if (remaining.length) openedByUs.set(fieldHandle, remaining);
         else openedByUs.delete(fieldHandle);
       }
-      watchStop();
       return out;
     },
 
@@ -1055,6 +1061,7 @@
     write(handle, text) {
       const el = get(handle);
       if (!el) return { ok: false, why: 'gone' };
+      if (isPassword(el)) return { ok: false, why: 'protected-type' };
       if (el.disabled) return { ok: false, why: 'disabled' };
       if (el.readOnly) return { ok: false, why: 'readonly' };
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
@@ -1128,80 +1135,67 @@
     readback(handle, displaySelector) {
       const el = get(handle);
       if (!el) return { error: 'gone' };
-      const dom = typeof el.value === 'string' ? el.value : null;
-      let display = null;
+      if (privateRead(el)) return { dom: null, display: null,
+        model: { found: false, via: 'private-masked' }, masked: true,
+        value_len: typeof el.value === 'string' ? el.value.length : null,
+        selected_index: el.tagName === 'SELECT' ? el.selectedIndex : null };
+      const dom = typeof el.value === 'string' ? el.value : (el.isContentEditable ? el.innerText : null);
+      let display = null, displaySource = null, unknown = false, candidates = [];
+      const evidence = node => ({ handle: register(node), id: node.id || '',
+        tag: node.tagName.toLowerCase(), text: clean(node.innerText), rect: rectOf(node) });
       if (displaySelector) {
-        let shown = null;
-        try { shown = document.querySelector(displaySelector); } catch (e) { shown = null; }
-        if (shown) display = clean(shown.tagName === 'INPUT' ? shown.value : shown.innerText);
-      }
-      if (display === null) {
-        // 没给显示值选择器时，在字段容器里找显示值元素（纯下拉的 input.value 常常是空的）。
-        //
-        // 往上找要当心：站点常把"年/月/起/止"几个控件放进同一个字段容器，一路上溯再取
-        // 第一个显示值元素，会把隔壁控件的值当成自己的——"月"读成"年"，一整页假不一致。
-        // 所以先定界到这个控件自己的最小容器，上溯时还要校验找到的显示值和本控件同一行。
-        const DISP = '[class*="display-value"],[class*="selected-value"],'
-          + '[class*="selection-item"],[class*="selected-item"]';
-        const mine = rectOf(el);
-        const sameRow = node => {
-          const r = rectOf(node);
-          const overlap = Math.min(r.y + r.h, mine.y + mine.h) - Math.max(r.y, mine.y);
-          return overlap > Math.min(r.h, mine.h) * 0.5;   // 纵向重叠过半才算同一行
-        };
-        // 先在控件自己的最小容器里找：往上走，一旦祖先里出现第二个输入控件就停。
-        let ownBox = el;
-        for (let node = el.parentElement, d = 0;
-             node && node !== document.body && d < 4
-             && node.querySelectorAll('input:not([type=hidden]),textarea,select').length <= 1;
-             node = node.parentElement, d++) ownBox = node;
-        const own = [...ownBox.querySelectorAll(DISP)].find(visible);
-        if (own) display = clean(own.innerText);
-        if (display === null) {
-          let wrap = ownBox.parentElement;
-          for (let d = 0; wrap && wrap !== document.body && d < 3; d++) {
-            const shown = [...wrap.querySelectorAll(DISP)].find(n => visible(n) && sameRow(n));
-            if (shown) { display = clean(shown.innerText); break; }
-            wrap = wrap.parentElement;
-          }
+        let nodes;
+        try { nodes = [...document.querySelectorAll(displaySelector)].filter(visible); }
+        catch (e) { nodes = []; }
+        candidates = nodes.map(evidence);
+        if (nodes.length === 1) {
+          display = nodes[0].tagName === 'INPUT' ? nodes[0].value : clean(nodes[0].innerText);
+          displaySource = 'agent-selector';
+        } else {
+          unknown = true;
+          displaySource = 'unresolved-agent-selector';
         }
-        // 还是没有显示值元素：这个控件的值就写在它自己身上。日期框和一部分下拉是这样的
-        // （点出来一个面板选，但选中的值回填进 input.value，页面上没有单独的显示节点）。
-        // 不回落的话这类字段永远回读不过——而值明明已经填对了，报出来却是"显示值读到 None"。
-        if (display === null && typeof dom === 'string' && dom !== '') display = dom;
-        // 纯 div 实现的控件（没有 input，值就是控件内的那段文字）。
-        // 上面那张 DISP 是 class 名单，命中不了自研组件库的命名——实测某站的值元素叫
-        // `brick-select-selection-value`，四个词一个都不沾。而**控件自己显示出来的文字
-        // 就是用户看到的值**，这是结构事实，不依赖它叫什么 class。
-        // 不加这一条，这类字段写进去了也回读不出来，报"回读不一致"——又一次把
-        // "我读不出来"说成"它没填上"。
-        //
-        // 但不能直接取 el.innerText：控件里还有装饰节点（下拉箭头 ⌄、清空叉、单位后缀），
-        // 整块取会读成"硕士 ⌄"，和"硕士"比不相等。值和装饰在 DOM 里是分开的叶子，
-        // 所以按叶子收、**挑最长的那个**——值是用户要读的信息，装饰是一两个符号。
-        if (display === null && dom === null) {
-          const leaves = [];
-          for (const node of el.querySelectorAll('*')) {
-            if (node.children.length) continue;
-            if (!visible(node)) continue;
-            const t = clean(node.innerText);
-            if (t) leaves.push(t);
-          }
-          if (leaves.length) {
-            display = leaves.reduce((a, b) => (b.length > a.length ? b : a));
-          } else {
-            const own = clean(el.innerText);     // 值直接挂在控件身上、没有子节点
-            if (own) display = own;
-          }
+      } else if (typeof dom === 'string') {
+        display = dom;
+        displaySource = 'native-value';
+      } else {
+        // 只观察当前控件中的可见文本，不按class、最长文字或邻近字段猜值。
+        const nodes = [el, ...el.querySelectorAll('*')].filter(node =>
+          node.children.length === 0 && visible(node) && clean(node.innerText));
+        candidates = nodes.map(evidence);
+        if (nodes.length === 1) {
+          display = candidates[0].text;
+          displaySource = 'unique-visible-text';
+        } else {
+          unknown = true;
+          displaySource = 'ambiguous-visible-text';
         }
       }
-      return { dom, display, model: api.modelValue(handle),
-               selected_index: el.tagName === 'SELECT' ? el.selectedIndex : null };
+      return { dom, display, display_source: displaySource, display_unknown: unknown,
+        display_candidates: candidates, model: api.modelValue(handle),
+        selected_index: el.tagName === 'SELECT' ? el.selectedIndex : null };
+    },
+
+    compareKnownValue(handle, expected, displaySelector) {
+      const el = get(handle);
+      if (!el || isPassword(el)) return { dom_match: false, display_match: false };
+      const domMatch = typeof el.value === 'string' && el.value === expected;
+      let displayMatch = domMatch;
+      if (displaySelector) {
+        let nodes;
+        try { nodes = [...document.querySelectorAll(displaySelector)].filter(visible); }
+        catch (e) { return { dom_match: domMatch, display_match: false }; }
+        displayMatch = nodes.length === 1 && (nodes[0].tagName === 'INPUT'
+          ? nodes[0].value : clean(nodes[0].innerText)) === expected;
+      }
+      // 校验在浏览器内进行，只给相等结果，不返回受保护字段的原始内容。
+      return { dom_match: domMatch, display_match: displayMatch };
     },
 
     modelValue(handle) {
       const el = get(handle);
       if (!el) return { found: false, why: 'gone' };
+      if (privateRead(el)) return { found: false, via: 'private-masked' };
       // React：从挂载容器拿 root.current，遍历活动树找 stateNode === el
       let container = null;
       for (const node of [document.body, ...document.body.children]) {

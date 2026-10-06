@@ -92,7 +92,7 @@
     const secretByText = /证件|身份证|护照|密码|password|验证码|captcha|银行卡|card|手机|电话|phone|mobile|\btel|邮箱|email|mail/i.test(label + ' ' + headingOf(box) + ' ' + attrs);
     const digits = val.replace(/\D/g, '');
     const secretByValue = (/^\+?[\d\s-]{11,16}$/.test(val.trim()) && digits.length === 11) || /^\d{17}[\dXx]$/.test(val.trim()) || /^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(val.trim());
-    const secret = secretByText || secretByValue;
+    const secret = el.tagName === 'INPUT' && el.type === 'password' || secretByText || secretByValue;
     // 页面明文写的字数要求（"200-1000 字""不超过 500 字"），和 maxlength 属性分开报，两者常常不一致
     const hintText = clean(wrap.innerText || '').replace(clean(val), '');
     const hm = hintText.match(/(\d+)\s*[个]?字?\s*[-~～–—至到]\s*(\d+)\s*[个]?字|(?:不超过|最多|限|以内)\s*(\d+)\s*[个]?字|(\d+)\s*[个]?字以内/);

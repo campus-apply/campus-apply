@@ -5,7 +5,7 @@
 两个必填框。第一轮探测时它们不在页面上，所以计划里没有它们；执行器填完语言类型就转去填
 别的板块，那两个框一直空着，整页提交前才发现。
 
-这里验的是：probe-options 开关下拉时顺手选一个值，把被带出来的字段报出来。
+这里验的是：读取选项不选择分支；真实目标执行后重新观察新增字段。
 
   python3 evals/conditional_fields_check.py --out /tmp/cond-check [--headless]
 
@@ -78,6 +78,8 @@ input.addEventListener('click', () => {
   }));
   box.appendChild(panel);
 });
+// 本页的既有mousedown/click重建机制保留；外部真实点击可关闭。
+document.addEventListener("mousedown", e => { if(!box.contains(e.target))box.querySelectorAll(".panel").forEach(p=>p.remove()); });
 // 再点一次输入框收面板
 input.addEventListener('mousedown', () => {
   const p = box.querySelector('.panel');
@@ -130,28 +132,35 @@ def check(port, out, url, rows):
 
     # probe-options：开下拉、读选项、顺手触发一次
     opts = out / 'options.json'
-    r = run_cdp(port, out, 'probe_options', '--mark', mark, 'probe-options', str(opts),
+    r = run_cdp(port, out, 'probe_options', '--mark', mark, 'probe-options', str(opts), '--only', '语言类型',
                 check=False)
     report = json.loads(opts.read_text(encoding='utf-8'))
     lang = next((f for f in report['fields'] if f['label'] == '语言类型'), None)
     rows.append(('读回了下拉的全部选项',
                  lang is not None and lang.get('count') == 3,
                  str(lang.get('options') if lang else None)))
-    revealed = [x['label'] for x in (lang or {}).get('revealed') or []]
-    rows.append(('选一个值之后，被带出来的字段报出来了',
-                 '语言考试' in revealed and '考试分数' in revealed,
-                 '报出来的是：' + '、'.join(revealed)))
-    rows.append(('屏幕上提示了这些是条件字段、要一起填',
-                 '要一起填' in r.stdout,
-                 (r.stdout.strip().splitlines() or [''])[-1][:120]))
-
-    # 探测之后：骨架里应当已经包含这两个字段
+    rows.append(('读选项不替agent选分支',
+                 (lang or {}).get('branch_selected') is False,
+                 'branch_selected=' + str((lang or {}).get('branch_selected'))))
+    unchanged = out / 'skeleton-readonly.json'
+    run_cdp(port, out, 'skeleton_readonly', '--mark', mark, 'plan-skeleton', str(unchanged))
+    fields0 = json.loads(unchanged.read_text(encoding='utf-8'))['fields']
+    rows.append(('仅读选项后条件字段仍未出现',
+                 not any(f['label'] in ('语言考试','考试分数') for f in fields0), 'readonly observed'))
+    field = next(f for f in fields0 if f['label']=='语言类型')
+    field.update(kind='dropdown', value='英语', options=(lang or {}).get('options') or [])
+    plan_path = out / 'confirmed-language.json'
+    plan_path.write_text(json.dumps(dict(fields=[field], pace=dict(min=0,max=0)), ensure_ascii=False), encoding='utf-8')
+    filled = run_cdp(port, out, 'actual_choice', '--mark', mark, 'fill', str(plan_path), check=False)
+    rows.append(('真实选择后交回观察而不是报写入失败',
+                 '"status": "filled"' in filled.stdout and '"needs_observation": true' in filled.stdout,
+                 filled.stdout[-150:]))
     after = out / 'skeleton-after.json'
     run_cdp(port, out, 'skeleton_after', '--mark', mark, 'plan-skeleton', str(after))
     labels1 = {f['label'] for f in json.loads(after.read_text(encoding='utf-8'))['fields']}
-    rows.append(('探测之后骨架里有了条件字段，一次就完整',
+    rows.append(('真实选择后观察到当前新增字段',
                  '语言考试' in labels1 and '考试分数' in labels1,
-                 '探到的是：' + '、'.join(sorted(labels1))))
+                 'observed=' + '、'.join(sorted(labels1))))
     return report
 
 
