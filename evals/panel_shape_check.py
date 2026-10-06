@@ -171,6 +171,24 @@ CASES = [
              # 这一组的结构证据是"脾气真的相反"，在 check_temper() 里单独验：
              # 执行器知道的三招对 close-section 全废，而点板块标题一下就收掉。
          ]),
+    dict(name='形状 E：选项文字与页面别处的已选值同字',
+         query='shape=e',
+         # 真站实测（阿里巴巴校招简历页）：「学历」面板的选项是 本科/硕士/博士/…，而页面上
+         # 另有两条教育经历，它们各自**已选中的学历值**就印在那里。收没收干净的判据是
+         # "开它时读到的选项文字现在还看得见吗"——满页去找时这两个已选值正好命中、达到
+         # 阈值 2，于是面板**永远判成开着**：五招收面板全废、账本永远销不掉（实测
+         # close_trick: None、open_panels: 4），之后每个字段都在"几个面板盖着"的状态下探，
+         # 候选退化成页脚/侧栏那类常驻浮层——那才是 5 个字段报 unsure 的真正原因。
+         # 判据本身没错（面板存在的意义就是让选项可见），错在搜索范围：要收回这一块浮层。
+         fields=[dict(key='e-degree', label='最高学历', kind='dropdown',
+                      selector='#ps-e-degree', value='本科',
+                      display_selector='[data-display="e-degree"]')],
+         expect_keys=['e-degree'],
+         regression='收不起来',
+         anchor='#ps-e-degree', real='.sd-Dropdown-dropdown-1CigZ',
+         shape_evidence=[
+             ('真面板开得出来且可见', lambda d: d['realPanelExists'] and d['realPanelVisible']),
+         ]),
 ]
 
 

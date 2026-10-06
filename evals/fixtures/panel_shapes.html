@@ -35,7 +35,7 @@
            注意：本组的判据是"应该怎样"——选项到位后必须探到并选中。
 
   查询参数：
-    ?shape=a|b|c|close|d|all 只渲染哪一组，不给就全渲染（all）
+    ?shape=a|b|c|close|d|e|all 只渲染哪一组，不给就全渲染（all）
     ?fillers=<个数>          形状 C 的常驻假容器个数，默认 77（实测值）
     ?delay=<毫秒>            形状 D 的选项渲染延迟，默认 300；eval 跑 300 和 750 两档
 
@@ -143,6 +143,33 @@ button{font:inherit;padding:8px 22px;border-radius:4px;border:1px solid #bbb;bac
     <input class="ps-input" id="ps-close-section" data-ps-input="close-section"
            data-display="close-section" readonly placeholder="请选择">
     <p class="ps-note">只认"点板块标题"，再点输入框没反应。</p>
+  </div>
+</section>
+
+<section class="ps-group" data-group="e">
+  <h2 class="ps-section-title">形状 E：面板选项的文字，同时作为别处已选中的值印在页面上</h2>
+  <!-- 真站实测（阿里巴巴校招简历页）：「学历」面板的选项是 本科/硕士/博士/…，
+       而页面上**另有两条教育经历**，它们各自已选中的学历值就显示在那里。
+       收没收干净的判据是"开它时读到的选项文字现在还看得见吗"——若满页去找，
+       这两个已选值正好命中、达到阈值 2，于是这个面板**永远判成开着**：
+       五招收面板全部失效、账本永远销不掉（实测 close_trick: None、open_panels: 4），
+       之后每个字段都在"几个面板盖着"的状态下探，候选退化成页脚/侧栏那类常驻浮层。
+       判据本身没错（面板存在的意义就是让选项可见），错在搜索范围。 -->
+  <div class="ps-field" data-shape="e">
+    <label class="ps-field-title">本科学历</label>
+    <!-- 这一条已经有值了，值就是下面那个面板的选项之一 -->
+    <span class="ps-echo" data-ps-echo="1">本科</span>
+  </div>
+  <div class="ps-field" data-shape="e">
+    <label class="ps-field-title">硕士学历</label>
+    <span class="ps-echo" data-ps-echo="2">硕士</span>
+  </div>
+  <div class="ps-field" data-shape="e">
+    <label class="ps-field-title">最高学历</label>
+    <!-- 要填的是这个。它的面板选项里就有「本科」「硕士」——和上面两个已选值同字 -->
+    <input class="ps-input" id="ps-e-degree" data-ps-input="e-degree"
+           data-display="e-degree" readonly placeholder="请选择">
+    <p class="ps-note">面板收起后，「本科」「硕士」仍印在上面两条里——那不是面板没收掉。</p>
   </div>
 </section>
 
@@ -304,6 +331,31 @@ const D_SETS = {
   'd-degree': {cls: 'x-aside-item', values: ['本科', '硕士', '博士']},
   'd-year':   {cls: '',             values: ['2024', '2025', '2026', '2027']},
 };
+// 形状 E：选项文字与页面别处的已选值同字。脾气同"再点一次输入框才收"。
+document.querySelectorAll('[data-shape="e"] [data-ps-input]').forEach(input => {
+  const key = input.dataset.psInput;
+  truth[key] = '';
+  // 收面板时**只隐藏、不从 DOM 里摘掉**——真站（组件库 portal）就是这样，面板节点一直留着，
+  // 整页攒了 38 个不可见的 overlay 容器。这一点必须同构：若 fixture 用 panel.remove()，
+  // stillOpen 的 `!panel.isConnected` 分支会先把账销掉，"选项还看得见吗"那段压根跑不到，
+  // 于是满页搜索的缺陷在 fixture 上永远测不出来（本轮实际踩到：连试三次都是绿的）。
+  const hidePanel = panel => { panel.style.display = 'none'; openPanels.delete(panel); };
+  input.addEventListener('click', () => {
+    const open = panelOf(key);
+    if (open) { bump(key, 'click-input-again'); hidePanel(open); return; }
+    const box = input.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.className = 'sd-Dropdown-dropdown-1CigZ';
+    panel.dataset.owner = key;
+    panel.style.left = (box.left + scrollX) + 'px';
+    panel.style.top = (box.bottom + scrollY + 2) + 'px';
+    panel.innerHTML = items('sd-Menu-content-item', ['本科', '硕士', '博士']);
+    document.body.appendChild(panel);
+    openPanels.add(panel);
+    choose(input, key, panel, 'sd-Menu-content-item', null);   // 选完不自动收起
+  });
+});
+
 document.querySelectorAll('[data-shape="d"] [data-ps-input]').forEach(input => {
   const key = input.dataset.psInput;
   const set = D_SETS[key];

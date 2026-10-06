@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 15;
+  const VERSION = 16;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -867,15 +867,49 @@
         const texts = panelTexts.get(panel);
         let showing;
         if (texts && texts.length) {
-          // 这些文字现在还在页面上可见吗。一个都见不到就是收了。
+          // 这些文字**在这个面板所属的那一块里**现在还看得见吗。一个都见不到就是收了。
+          //
+          // 两个方向都得顾，它们是两次真站实测分别逼出来的，缺一个就错一边：
+          //
+          // ① 不能只看"我记下的那个节点可见吗"（`1353c0e` 之前的写法）。面板分好几层时
+          //    记下的往往是其中一层，那一层不可见了别的层还开着 —— 报"面板 0"而页面上
+          //    面板还开着，残留面板让下一轮探测整个失真。所以要看**整块**，不只看记下的
+          //    那一层：从记下的节点往上走到它所在浮层的最外层，再查这棵子树。
+          //
+          // ② 也不能满页找（`1353c0e` 的写法）。选项文字被选中之后会显示在控件上，
+          //    于是它在页面别处**合法地**可见。实测阿里「学历」面板的选项是
+          //    博士/硕士/本科/大专，面板关掉后页面上仍有「博士」「本科」两个 <em>
+          //    —— 那是两条教育经历各自已选中的值。满页找正好命中 2 个、达到阈值，
+          //    于是这个面板**永远判成开着**：五招收面板全部失效、账本永远销不掉
+          //    （实测 `close_trick: None`、`open_panels: 4`），之后每个字段都在
+          //    "4 个面板盖着"的状态下探，候选退化成页脚和侧栏那些常驻浮层。
+          //    那才是 5 个字段报 unsure 的真正原因 —— 不是"认不出面板"。
+          //
+          // 判据本身没变（面板存在的意义就是让选项可见），变的只是搜索范围：
+          // 从"整页"收回"这一块浮层"。往上找最外层用的是几何与定位事实
+          // （还在浮层里、还盖着同一片区域），不认任何 class。
+          const root = (() => {
+            let top = panel;
+            for (let node = panel.parentElement, d = 0;
+                 node && node !== document.body && d < 6; node = node.parentElement, d++) {
+              const pos = getComputedStyle(node).position;
+              // 仍属于同一层浮层：自己是定位元素，或直挂 body/html（portal 壳就是这样）。
+              if (pos === 'fixed' || pos === 'absolute'
+                  || node.parentElement === document.body
+                  || node.parentElement === document.documentElement) top = node;
+              else break;
+            }
+            return top;
+          })();
           const seen = new Set();
-          for (const el of document.querySelectorAll('*')) {
+          for (const el of root.querySelectorAll('*')) {
             if (el.children.length) continue;
             if (!visible(el)) continue;
             const t = clean(el.innerText);
             if (t && texts.includes(t)) seen.add(t);
             if (seen.size >= 2) break;                 // 见到两个就够了，不必数全
           }
+          // 整块都不可见时子树里一个叶子也读不到，上面自然得 0 —— 那就是"收了"。
           showing = seen.size >= Math.min(2, texts.length);
         } else {
           showing = visible(panel);                    // 没记下选项（老路径），退回原判据
