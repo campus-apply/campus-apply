@@ -1,40 +1,18 @@
-# 控件处理办法
+# 控件操作：现场证据与已声明目标
 
-参考实现：`../campus-apply/scripts/browser/lib_antd3.js`（`window.__ca`，antd 3.x）。下面按 UI 框架分，选择器以现场为准。
+## 先判断当前控件
+用survey、DOM与必要的截图确定它是字段/动作/面板/显示节点。框架名与class不是行为保证；不按Moka、antd或其他系统名称选择固定点法。下列方法是可选工具，由agent根据本页证据采用。
 
-## 文本写入的标准序列
-- 原型上的 value setter 赋值 → 派发 `input` → 派发 `change` → 派发 `FocusEvent('blur')` 和 `focusout`。受控组件常常只在失焦时才把值交给表单模型，不派发失焦事件的话显示值、字数统计全对，保存后却是空的。后台标签页里 `el.focus()` / `el.blur()` 不会触发焦点事件，所以事件要自己派发。
-- 写完读三层核对：显示值、DOM `value`、框架模型值。**显示值和 DOM 一致就算写进去，框架模型值只作参考**（原因见 `on-site-principles.md` 的"回读分三层"）。React 要从挂载容器的 `root.current` 往下遍历、找 `stateNode` 是这个元素的 fiber——那才是活动分支；元素上挂着的 `__reactFiber$…` 在奇数次提交后指向旧分支，沿 `return` 往上找会读到旧值。Vue 看 `__vue__` 或 `__vueParentComponent`。这套读法 `lib_fill.js` 里已经实现好了，`fill` 自动用，不用自己写。
-- 显示值或 DOM 回读不过就换 `chrome_cdp.py --mark <ID> type <选择器> <文本|@文件>`：真实鼠标点击取得焦点 → 全选 → 走浏览器自己的输入路径写入 → 补 input / change / blur / focusout → 回读。框架分不出这和人打字的区别。它比 setter 慢一点、每次一个字段，所以是兜底不是默认；哪个站哪类控件要它，记进站点笔记。
+## 文本与原生控件
+文本默认fill：原型value setter、input/change、blur/focusout，写后回读。目标已明确但setter无效时可用type的真实浏览器输入路径；两次无效交接。
+原生select读取native_options（显示文字、编码value、节点和索引）。重名不取第一项，agent明确给option_selector；回读核对实际value与selectedIndex。文字与编码不同不是写入失败的理由。
+checkbox/radio只按用户已定的数据/意愿改变，不为探测去勾；有后果的选项按collect-table处理。
 
-## 两种点法
-- 页面脚本里的 `el.click()` 是合成事件，多数控件认，但有的控件只认真实鼠标事件。脚本点了没反应、面板不出现，就换 `chrome_cdp.py --mark <ID> click <目标>`：它通过浏览器发真实鼠标事件，目标可以是 CSS 选择器、`js:` 表达式（求值得到元素，适合按文本找菜单项）或视口坐标。
-- 探控件类型时，"合成点击没反应、真实点击有反应"是**本页**的结论：本页后面的同类控件直接用 `click`，但不写进站点笔记——换一页可能就不一样。
-- 有的站点把没提交的表单内容存在浏览器本地存储（`localStorage`）里，刷新也不消失；要撤销试探性写入，先看有没有这样的键，删掉再刷新。哪个站怎么存，探到了记站点笔记。
+## 自定义控件与真实鼠标
+click支持CSS、返回元素的js表达式或DOM精确计算的坐标。执行前检查连接、可见和遮挡；面板、选项各有明确目标。多候选用panel_selector/option_selector；多级用按步骤的数组，每步重新验证，不要求第二级一定开新面板。
+搜词和选择是两件动作，输入词不等于选中。显示值可能在别处，由agent确认display_selector，不按类名或最长文字猜。
+关闭动作在本页核验，旧节点移除但新候选出现要看图判断，不能谎报已关闭。禁止document.body.click()和合成键盘事件；可用现有click发真实鼠标。
 
-## antd 3.x
-
-- 文本框/文本域：用原型上的 value setter 赋值，再派发 `input` 和 `change` 事件，React 才能感知。
-- 日期（只读的 `ant-calendar-picker-input`）：点输入框打开面板 → 往面板里的 `input.ant-calendar-input` 写 `YYYY-MM-DD` → 再点一次输入框收起 → 轮询等面板消失。面板挂在 body 下，按位置匹配（面板顶边≈输入框底边，或面板底边≈输入框顶边）。清空用 `.ant-calendar-picker-clear`。
-- 下拉（`ant-select`）：点 `.ant-select-selection` 打开，下拉列表也挂在 body 下，同样按位置匹配（上下弹出都要认），再点 `li.ant-select-dropdown-menu-item`。多选下拉点多次即可。
-- 搜索型下拉（学校名称）：打开后往 `input.ant-select-search__field` 写关键词，等接口返回再点选项。
-- 级联（`ant-cascader`）：点输入框打开 `.ant-cascader-menus`，逐级点 `li`；选中值显示在 `.ant-cascader-picker-label`，不在 input 里。
-- 单选：点对应 `label.ant-radio-wrapper`。
-- 删除：点删除按钮会弹 antd-mobile 确认框，点其中的"确认"。
-
-
-## 其他 UI 框架
-- antd 4/5：日期是 `.ant-picker`，下拉是 `.ant-select` + `.ant-select-dropdown`（结构与 3.x 不同，选项是 `.ant-select-item-option`）；面板同样挂 body 下，按位置匹配的思路不变，选择器要现场看。
-- Element UI（Vue）：`.el-input__inner`、`.el-select` + `.el-select-dropdown`、`.el-date-editor`；赋值同样要用原型 setter + input 事件。
-- 原生 `<select>`：直接改 `value` 再派发 `change`。
-- 现场探测：先跑 `survey`（或 `probe.js`）看 `kind`、`cls` 和 `wrapCls`，再决定用哪套写法。
-- class 带发版哈希后缀（形如 `search-LvPmRxVfY4`，每次发版都变）：用前缀匹配 `[class^="search-"]` 或 `[class*="search-"]`，不要写死整个 class。
-
-## Moka（`sd-` 前缀组件）
-- 字段容器 `[class*="apply-field-"]`，文本以字段标题开头；板块容器 `[class*="apply-block-"]`，条目组 `[class*="apply-fields-"]`，每个板块的"添加"按钮加一组。
-- 纯下拉与级联：点输入框打开，选项是 `[class*="sd-Menu-content-item"]`（挂 body 下）；级联点第一级后第二级项出现在同一选择器里；点选项即选中，选中值显示在 `span[class*="sd-Input-display-value"]`，`input.value` 恒为空，回读要读显示值。关面板点该字段的标题。
-- 可搜索下拉（年、月、学校名称）：点输入框 → 用原生 setter 输入 → 在这个输入框自己的菜单里（按位置匹配）点完全相等的项 → 核对显示值。只输入不点菜单项，值不会选中，菜单也不会关。月份的选项是 1 到 12，不带前导零。
-- 文本框、文本域：原生 setter + input/change 事件有效。"至今"是 `sd-Checkbox-input-*`。
-- 日期面板（出生日期）：只读输入框，合成点击打不开，用 `click` 发真实鼠标事件才打开；年份用双箭头翻、再点月、再点日；翻页太多时交给用户手点更快。
-- 错误提示 `div[class*="sd-Input-error"]` 可能滞后，不作填没填的判据。
-- 探选项时同一元素可能被多个选择器命中而重复，去重后再列给用户。
+## 特殊情况与参考代码
+fill表达不了的控件，agent可在已授权范围内用click/type/exec/stage现场操作并回读；不因统一工具无能力停在无解循环，不为每个正常字段另写脚本。
+lib_antd3.js保留为历史实现参考，不是框架识别器或本站保证。选择器只来自本次现场确认；不把一页成功的class/层级/关闭招式写成长期跨站结论。删除、覆盖、清空已有值先说明后果与已确认授权，不预言必有某类确认框。
