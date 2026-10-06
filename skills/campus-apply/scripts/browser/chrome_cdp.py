@@ -1456,6 +1456,7 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
                 records.append(dict(key=item.get('key') or item.get('selector'), status='not-started',
                                     why=f'到了 {max_seconds:g} 秒预算，这个字段没开始'))
                 continue
+            before = None
             try:
                 before = _field_structure(tab)
                 ok, record = _fill_one(tab, item, waits, learned)
@@ -1467,25 +1468,27 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
                 learned = record['closed_by']
             records.append(record)
             filled += 1 if ok else 0
-            if record.get('panel_left_open') or record.get('panel_status_unknown'):
+            time.sleep(random.uniform(lo, hi))
+            if before is not None:
+                try:
+                    after = _field_structure(tab)
+                except TabError as error:
+                    changes.append(dict(after_field=record.get('key'), observation_error=str(error)))
+                    record['structure_status_unknown'] = True
+                else:
+                    if before.keys() != after.keys():
+                        change = dict(after_field=record.get('key'),
+                            added=[after[k] for k in after.keys() - before.keys()],
+                            removed=[before[k] for k in before.keys() - after.keys()])
+                        changes.append(change)
+                        record['structure_change'] = change
+            else:
+                record['structure_status_unknown'] = True
+            if changes or record.get('structure_status_unknown') or record.get('panel_left_open') or record.get('panel_status_unknown'):
                 records.extend(dict(key=later.get('key') or later.get('label') or later.get('selector'),
-                                    status='not-started',
-                                    why='先确认前一字段的面板状态，再执行剩余计划')
+                                    status='not-started', why='页面结构/关闭状态已变化或未知，先交agent观察')
                                for later in items[index + 1:])
                 break
-            time.sleep(random.uniform(lo, hi))              # 字段间留间隔，节奏照 skill 的两档规矩
-            if record.get('status') == 'filled':
-                after = _field_structure(tab)
-                if before.keys() != after.keys():
-                    change = dict(after_field=record['key'],
-                                  added=[after[k] for k in after.keys() - before.keys()],
-                                  removed=[before[k] for k in before.keys() - after.keys()])
-                    changes.append(change)
-                    record['structure_change'] = change
-                    records.extend(dict(key=later.get('key') or later.get('label') or later.get('selector'),
-                                        status='not-started', why='字段节点或集合已变化，先交回agent重新观察')
-                                   for later in items[index + 1:])
-                    break
         # 收尾的只读检查不能把账本烧掉：页面在填写期间导航过的话 window.__caFill 随旧文档消失，
         # 这一行会抛异常。先把逐字段报告打出去，再报告上下文丢了。
         lost, still = None, []

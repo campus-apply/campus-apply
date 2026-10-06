@@ -158,8 +158,8 @@ def main():
         # 真站实测的形状：面板挂 body 下一个自身 1200×0 的壳里，真面板是壳里面那个
         # absolute 定位的子节点（286×264）。按"节点自己的盒子够不够大"筛候选会把
         # 这个 0 高壳扔掉，面板跟着消失——面板明明开着却报"没出现候选"。
-        # 另一个坑：同一个壳被 MutationObserver 记两次（新增 + 属性变化），
-        # 两次都下沉到同一层会把一个面板登记成两条一样的候选 → 报"认不准"。
+        # 同一个DOM节点仍应去重；不同的父/子节点不能靠祖先关系淘汰。
+        # 多候选允许交给agent，必须保留完整选项及节点身份，不能要求按class猜一个。
         print('\n=== D: portal panel (zero-height shell under body) ===')
         r = cdp(mark, 'open', base + '?shape=4', mark + '-p')
         tf_portal = tempfile.mktemp(suffix='.json')
@@ -168,10 +168,20 @@ def main():
         city = [f for f in portal.get('fields', []) if f.get('label') == '目标城市']
         fails += 0 if assert_true('portal dropdown explored', city) else 1
         if city:
-            got = city[0].get('count') or city[0].get('optionCount') or 0
-            fails += 0 if assert_eq('portal optionCount', got, 7) else 1
-            fails += 0 if assert_eq('portal kind not unsure (一个面板不该登记成两条)',
-                                    city[0].get('kind') != 'unsure', True) else 1
+            expected = ['北京', '上海', '深圳', '广州', '杭州', '成都', '武汉']
+            row = city[0]
+            candidates = row.get('candidates') or []
+            tables = [row.get('options') or []] + [c.get('options') or [] for c in candidates]
+            fails += 0 if assert_true('portal complete option table retained', expected in tables) else 1
+            handles = [c['handle'] for c in candidates]
+            fails += 0 if assert_eq('portal candidates have distinct DOM identities',
+                                    len(handles), len(set(handles))) else 1
+            if candidates:
+                full = [c for c in candidates if c.get('options') == expected]
+                fails += 0 if assert_true('portal full table carries every option node',
+                    any([n.get('label') for n in c.get('option_nodes', [])] == expected for c in full)) else 1
+                fails += 0 if assert_eq('portal ambiguity is explicit', row.get('kind'), 'unsure') else 1
+            fails += 0 if assert_eq('portal closes after reading without selecting', row.get('closed'), True) else 1
 
         # ── shape 5: a panel left open from a previous round ──────────────────
         # 面板靠"点击前后谁新出现了"认，所以上一轮没收干净的面板会让这一轮失真：

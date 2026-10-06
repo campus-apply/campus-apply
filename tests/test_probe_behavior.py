@@ -124,3 +124,17 @@ def test_close_rebuilding_menu_reports_unknown_not_closed(browser):
     assert row['panel_status_unknown'] is True
     assert row['close_candidates']
     assert browser.js("document.querySelectorAll('#rebuilt-menu').length")==1
+
+
+def test_failed_readback_still_stops_plan_after_structure_changes(browser):
+    page(browser)
+    first=item(browser,'语言类型','英语','dropdown')
+    first.update(options=['中文','英语'],display_selector='#missing')
+    second=item(browser,'说明','旧中文分支的内容')
+    path=browser.out/'failed-readback-change.json'
+    path.write_text(json.dumps(dict(fields=[first,second],pace=dict(min=0,max=0))))
+    result=browser.command('fill',path)
+    report=report_of(result)
+    assert report['needs_observation'] is True
+    assert report['fields'][1]['status']=='not-started'
+    assert browser.js('window.fixtureTruth().note')==''

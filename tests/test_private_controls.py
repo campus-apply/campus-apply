@@ -77,3 +77,13 @@ def test_contact_fill_verifies_without_returning_raw_value(browser,kind,value):
     assert report['readback']['masked'] is True
     assert value not in json.dumps(report)
     assert report['readback']['dom_len']==len(value)
+
+
+def test_display_selector_cannot_expose_another_password_control(browser):
+    browser.document('<label for=field>城市</label><input id=field><input id=pw type=password value="'+DUMMY+'">')
+    handle=browser.call("window.__caFill.resolve('#field',0)")['handle']
+    result=browser.call(f'window.__caFill.readback({handle},"#pw")')
+    assert DUMMY not in json.dumps(result)
+    assert result['masked'] is True
+    comparison=browser.call(f'window.__caFill.compareKnownValue({handle},'+json.dumps(DUMMY)+',"#pw")')
+    assert comparison['display_match'] is False

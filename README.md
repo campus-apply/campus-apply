@@ -10,7 +10,7 @@ Campus-recruitment application skills for Chinese job sites, for Claude Code, Co
 
 它不做：批量投递、自动提交、解验证码、填证件号和密码、在浏览器外调用招聘站点的接口或伪造请求参数、跨站抓取岗位。简历附件默认由它代传（进了申请页第一件事就是传，好让站点先解析），你说"我自己传"就交给你；证件照、成绩单这类材料它会问你要文件。
 
-It keeps a sourced fact base with your preferences, screens jobs on a company's own careers page (full list and each posting's hard requirements shown to you first), tailors your existing resume docx in place, writes application essays, and walks you through the form page by page, telling you what it will fill and what you must do yourself, reading each page back. It never mass-applies, submits, solves captchas, touches ID or password fields, calls site APIs from outside the browser or forges request parameters, or scrapes across sites. You upload your resume yourself unless you explicitly ask it to.
+It keeps a sourced fact base with your preferences, screens jobs on a company's own careers page (full list and each posting's hard requirements shown to you first), tailors your existing resume docx in place, writes application essays, and walks you through the form page by page, telling you what it will fill and what you must do yourself, reading each page back. It never mass-applies, submits, solves captchas, touches ID or password fields, calls site APIs from outside the browser or forges request parameters, or scrapes across sites. It uploads the resume attachment first by default; tell it if you prefer to upload it yourself.
 
 ## 五个 skill / Skills
 
@@ -20,7 +20,7 @@ It keeps a sourced fact base with your preferences, screens jobs on a company's 
 | `resume-facts` | 初始化工作目录，建事实库，口径访谈、求职偏好访谈、个人档案访谈 |
 | `job-screen` | 在公司招聘页上列全量岗位、读每个岗位的详情（先看页面自己怎么取数据，能复用就复用，否则逐个读页面）、出三档筛选表和排除清单，同时出一份 Excel |
 | `resume-tailor` | 对照岗位出素材方案、写定稿文字、原地改 docx、写网申长文本与自述，写完过去 AI 味清单 |
-| `apply-fill` | 陪跑式填表：认领标签页、一条命令摸清整页、按语义坐标逐页填写与回读、保存后核对、提交前比对预览 |
+| `apply-fill` | 陪跑式填表：认领标签页、只读观察当前页面、按语义坐标增量填写与回读、保存后核对、提交前比对预览 |
 
 顺序：`resume-facts`（一次）→ `job-screen` → `resume-tailor` → `apply-fill`。已有 JD 可以跳过筛岗。
 
@@ -28,23 +28,16 @@ Flow: facts once, then screen, tailor, fill. Skip screening when you already hav
 
 ## 填表这一步在做什么 / How filling works
 
-填一整页表的时间，大半不花在浏览器上，而花在"页面已经就绪、却没有任何命令在跑"的那些空当里——
-agent 在抄控件清单、编下标、写计划。这一版把那几件事交还给代码：
+代码负责观察和提供证据，agent 根据用户资料及当前页面决定填什么、选哪个控件。看不清或 DOM 报告与页面矛盾时，agent 主动截图；具体值从 DOM 或文件精确读取。
 
-- `survey` 只读地一次把这页摸清：渲染稳没稳、有哪些字段、各自什么属性、有没有上传位。
-- `probe-options` 逐个打开下拉读回完整选项表再收起来（会点页面，动手前会跟你说）。
-- `plan-skeleton` 直接出一份计划骨架，每个字段带它的语义坐标（哪个板块、第几条记录、什么标签），
-  agent 只需要往 `value` 里填值。
-- `fill` 一条命令填完整页并逐字段回读。
+- `survey` 只读地收集当前可见字段、标签、属性和上传位。
+- `probe-options` 默认只读；agent 确认目标后，通过 `--only` 打开指定控件读取选项并收起，不任意试选。
+- `plan-skeleton` 生成带语义坐标的计划骨架。agent 填入已确认值，遇到多个面板或同名选项时显式指定目标。
+- `fill` 执行计划并回读。实际选择使字段新增、消失或替换时，停止剩余计划，重新观察后增量填写。特殊显示节点可由 agent 指定，无法确认的显示值或面板状态如实报告。
 
-字段按语义定位而不是按序号，所以中途给某个板块加一条经历，计划不会失效；证件号、出生日期这类
-字段默认拒绝写入。想知道一次投递里浏览器闲了多久，把 `CA_TIMING_FILE` 指向一个文件，
-结束后跑 `skills/campus-apply/scripts/idle_report.py`。
+已有内容和未知值受保护；证件号、密码、验证码不经手。保存后核对与最终提交仍按页面流程处理，提交由用户完成。想知道一次投递里浏览器闲了多久，把 `CA_TIMING_FILE` 指向一个文件，结束后跑 `skills/campus-apply/scripts/idle_report.py`。
 
-Most of the time spent filling a form is not spent in the browser: it is the agent copying
-control lists and numbering fields while the page sits idle. This version hands that work back
-to the code — one command to survey the page, one to read every dropdown's options, one to
-generate the plan skeleton with semantic coordinates, one to fill and read back.
+The code collects evidence; the agent decides what it means and which control or option to use. Survey first, explicitly open confirmed controls to read options, then execute a sourced plan. After an actual choice adds or replaces fields, observe again and fill incrementally. Ambiguous candidates and unknown readback or panel states remain explicit; screenshots help the agent inspect the page, while exact values come from the DOM or source files.
 
 ## 安装 / Install
 

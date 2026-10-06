@@ -1149,6 +1149,9 @@
         catch (e) { nodes = []; }
         candidates = nodes.map(evidence);
         if (nodes.length === 1) {
+          if (privateRead(nodes[0])) return { dom: null, display: null, masked: true,
+            value_len: typeof nodes[0].value === 'string' ? nodes[0].value.length : null,
+            model: { found: false, via: 'private-masked' }, display_source: 'private-agent-selector' };
           display = nodes[0].tagName === 'INPUT' ? nodes[0].value : clean(nodes[0].innerText);
           displaySource = 'agent-selector';
         } else {
@@ -1185,6 +1188,7 @@
         let nodes;
         try { nodes = [...document.querySelectorAll(displaySelector)].filter(visible); }
         catch (e) { return { dom_match: domMatch, display_match: false }; }
+        if (nodes.some(isPassword)) return { dom_match: domMatch, display_match: false };
         displayMatch = nodes.length === 1 && (nodes[0].tagName === 'INPUT'
           ? nodes[0].value : clean(nodes[0].innerText)) === expected;
       }

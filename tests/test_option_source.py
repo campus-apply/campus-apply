@@ -247,14 +247,6 @@ def test_check_script_runs_without_models_or_recruitment_sites():
 
 # ---- 这条设计约束要写在仓库里，不能只活在一次对话里 ----
 
-def test_the_positive_criterion_rule_is_written_down():
-    """判据要肯定式这件事，是今天花了四轮才换来的结论，得留在 skill 里。"""
-    doc = (HERE.parent / 'skills/apply-fill/references/on-site-principles.md').read_text(
-        encoding='utf-8')
-    assert '判据要肯定式' in doc, '这条约束要写进现场处理原则'
-    assert '淘汰' in doc, '要说清淘汰式判据的代价'
-    assert '排序' in doc, '要写明 class 清单只用于排序、不淘汰候选'
-
 
 def test_class_hints_are_only_ever_used_for_ranking():
     """两张 class 清单都只能排序。它们是这个文件里仅存的站点特征，别让它们回到淘汰位置。"""

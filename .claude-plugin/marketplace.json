@@ -6,7 +6,7 @@
     {
       "name": "campus-apply",
       "description": "事实库驱动的改简历与网申填写，基于用户已登录的浏览器现场操作。",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "source": "./",
       "author": { "name": "Wenkai Qu" }
     }

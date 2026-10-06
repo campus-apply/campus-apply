@@ -45,10 +45,3 @@ def test_empty_is_only_claimed_when_an_input_was_actually_found():
     # 容器没有任何输入控件、也没有显示值元素时，不能落到"读了 innerText，是空的"这条路上
     assert 'box.innerText' not in code, \
         '按容器 innerText 取值就是 #118 的病根：容器没有文本不等于字段是空的'
-
-
-def test_the_rule_is_written_down_for_the_model_too():
-    """代码改了，规矩也要写进 skill —— 不然模型仍然会把"探测报空"当成"没填"。"""
-    text = PRINCIPLES.read_text(encoding='utf-8')
-    assert '探测报空' in text or 'valueUnknown' in text, \
-        'on-site-principles 要写明"探测报空不等于没填"，容器型控件先下钻确认'

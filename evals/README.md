@@ -78,3 +78,9 @@ python3 evals/panel_shape_check.py --out /private/panel-shapes [--headless]
 逐轮直接收集退出码、stdout、stderr和单调时间；180秒默认deadline超时后终止进程组，不自动重试，不改provider。退出0不代表断言通过；错误/超时不属于skill行为失败；可识别的鉴权/loopback权限阻塞记`blocked`并停止后续自动答复。模型只从运行输出实际观察，缺失时`null`，错误消息的`<synthetic>`也不算模型。
 
 产物包含`manifest.json`、各轮`process.json`、完整日志、最后助手消息、独立表单状态/动作、断言和`report.json`。日志可能含本机环境元信息，应留私有目录，公开issue只引用脱敏摘要。不要dump配置、环境、登录凭证。
+
+## 1.4.2 的观察与 agent 选择验收
+
+`tests/test_label_behavior.py`、`test_agent_choices.py`、`test_probe_behavior.py`、`test_private_controls.py`、`test_display_observation.py`使用隔离 Chrome 检查真实 DOM 行为。`agent_choices_check.py`独立检查完整候选、同名选项、显式选择及实际点击；`conditional_fields_check.py`检查只读探测不任意试选，以及真实目标选择后的新增/替换字段再观察。它们不证明未知站点兼容，也不代替真实页面保存、刷新或提交验收。
+
+`control_shapes_check.py`默认连接9222；运行时应先启动隔离浏览器，把`CA_CDP_PORT`设为该调试端口，并为`--port`另选本地HTTP端口，避免接触用户正在使用的标签页。
