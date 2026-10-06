@@ -296,14 +296,28 @@ def main(argv=None):
                 if audit.get('panelsOpenNow'):
                     problems.append('结束时还有 %s 个面板开着' % audit['panelsOpenNow'])
 
-                # 形状 F 专属：点文本框不该被认成开出了面板
+                # 形状 F 专属：点文本框不该被**当成**开出了面板。
+                #
+                # 断言的是"没有一个候选够像面板"，不是"候选列表为空"——列表为空是淘汰式
+                # 的要求，与设计原则相反（候选宁可多收、连证据交给 agent，由 agent 判断）。
+                # 点一个文本框必然让它的包装容器改一次聚焦态 class，MutationObserver
+                # 必然记下它，所以它**必然出现在候选里**，这本身不是缺陷。
+                # 缺陷在于它曾经拿到 score 4：几何那两项（横向重叠 +2、紧贴控件 +2）
+                # 对"控件自己的皮肤"白送满分，而叶子数和浮层两项其实都是 0。
+                # 修法是只在"里面确实有选项"时才给几何加分——一个选项都没有的节点，
+                # 离控件再近也不是面板。所以这里改判 score 和 optionCount。
                 if appeared is not None:
                     if appeared.get('error'):
                         problems.append('取 appeared 失败：%s' % appeared['error'])
-                    elif appeared.get('appearedCount'):
-                        problems.append('点文本框后认出了 %s 个"面板"，期望 0：%s' % (
-                            appeared['appearedCount'],
-                            json.dumps(appeared.get('appeared'), ensure_ascii=False)[:200]))
+                    else:
+                        for c in (appeared.get('appeared') or []):
+                            if c.get('optionCount'):
+                                problems.append('点文本框后有候选报出了可点选项，期望 0：%s'
+                                                % json.dumps(c, ensure_ascii=False)[:200])
+                            elif (c.get('score') or 0) > 0:
+                                problems.append('一个选项都没有的候选却拿到了分数 %s：%s'
+                                                % (c.get('score'),
+                                                   json.dumps(c, ensure_ascii=False)[:200]))
                     if appeared.get('stillOpen'):
                         problems.append('脏账进了 openedByUs：stillOpen=%s' % appeared['stillOpen'])
 

@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 16;
+  const VERSION = 17;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -735,7 +735,17 @@
         if (leaves.length >= 2) score += 4;                      // 里面有一排能点的东西
         if (floating) score += 3;                                // 浮层，不是页面本身的一块
         if (el.matches(PANEL_HINT)) score += 2;                  // 命中那套常见的词
-        if (box) {
+        // 几何只在**里面确实有选项**时才加分。原来不论有没有选项都加，于是"被点控件自己的
+        // 包装容器"白拿满分：它和控件横向完全重叠（+2）、紧贴控件（+2），合计 4 分，
+        // 而叶子和浮层两项都是 0 —— 实测形状 F 报出来的那个假面板分数就是这么来的
+        // （`x-input x-input-focus`，score 4 = 2 + 2）。点任何文本框都会让它的包装容器
+        // 改一次聚焦态 class，于是它必然被 MutationObserver 记下、必然拿到这 4 分。
+        //
+        // 这不是"把控件自己的壳排除掉"的淘汰规则（那条规则会错杀"下拉就渲染在控件内部"
+        // 的站）。而是修一处**本来就说不通的加分**：几何回答的是"这东西在不在该出现的
+        // 位置上"，只有先是个装着选项的东西，位置才有意义。一个选项都没有的节点，
+        // 离控件再近也不是面板。
+        if (box && leaves.length) {
           const overlapX = Math.min(r.x + r.w, box.x + box.w) - Math.max(r.x, box.x);
           if (overlapX > 0) score += 2;                          // 和控件横向有重叠
           const gap = Math.min(Math.abs(r.y - (box.y + box.h)), Math.abs(box.y - (r.y + r.h)));
@@ -754,6 +764,11 @@
         cls: clean(s.el.className).slice(0, 80) || s.el.tagName,
         floating: s.floating, optionCount: s.optionCount,
         sampleTexts: s.sampleTexts, gapBelow: s.gapBelow,
+        // 这个候选是不是**被点控件自己的皮肤**（包含着那个控件）。只报事实，不在这里淘汰：
+        // 有的站把下拉就渲染在控件内部（antd 的 getPopupContainer 配一下就是这样），
+        // 那种情况下"包含控件"的同时**里面是有选项的**，照样是真面板。
+        // 两者的区别不在血缘而在"有没有选项"——判断留给调用方，这里给够证据。
+        wrapsTrigger: !!(anchor && s.el !== anchor && s.el.contains(anchor)),
       }));
     },
 
