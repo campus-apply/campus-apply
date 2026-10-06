@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 12;
+  const VERSION = 14;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -375,6 +375,10 @@
   // 自己点开过、还没收掉的面板。整页收尾只看这一本账，不看"页面上有多少节点像面板"——
   // 行内常驻容器永远像面板，拿它当失败判据会让某些站永远填不完。
   const openedByUs = new Map();       // handle → 面板元素
+  // 开面板那一刻它里面有哪些选项文字。收没收干净就靠它判断——**判据和 DOM 结构无关**：
+  // 面板存在的意义是让选项可见，所以"这些文字还看得见吗"就是"面板还开着吗"。
+  // 面板挂哪儿、分几层、用什么 class 都不影响这条成立。
+  const panelTexts = new WeakMap();   // 面板元素 → 开它时读到的选项文字
 
   const api = {
     // 整页控件表：一次调用读完，别一个字段一次往返。
@@ -720,13 +724,50 @@
     // 这里不再加"不能是控件自己那棵树"之类的血缘淘汰：有的站把下拉就渲染在控件内部
     // （antd 的 getPopupContainer 配一下就是这样），那条规则会让它永远记不上账。
     // 进这本账的面板由调用方挑定——挑准了是调用方的责任，这里只负责记。
+    // 这个字段现在开着的面板元素（给"点空白处"用，让它知道哪块地方要避开）。
+    openPanelOf(fieldHandle) {
+      const panel = openedByUs.get(fieldHandle);
+      return panel && panel.isConnected ? panel : null;
+    },
+
+    // 认不准哪个是面板、但面板确实开着时（probe-options 的 unsure 分支）：
+    // 把候选里读到的选项文字告诉这边，好让 stillOpen 判断收干净了没有。
+    //
+    // 为什么需要它：unsure 时没有 noteOpen（代码没挑定面板），账本里就没这一条，
+    // 于是收面板的第一步"查账本"查不到，直接当成已经收了——一招都没试，
+    // 面板留在页面上，下一轮探测整个失真。
+    // 这里记的是**选项文字**而不是某个节点，所以不依赖面板是什么结构。
+    notePanelTexts(fieldHandle, texts) {
+      const el = get(fieldHandle);
+      if (!el || !Array.isArray(texts)) return false;
+      // 以字段自己当"面板"记账：收面板的几招都是按字段 handle 操作的，
+      // 而判断收没收干净只看那些选项文字还在不在。
+      openedByUs.set(fieldHandle, el);
+      panelTexts.set(el, texts.filter(t => typeof t === 'string' && t && t.length <= 24));
+      return true;
+    },
+
     noteOpen(fieldHandle, panelHandle) {
       const panel = get(panelHandle);
       if (!panel) return false;
       openedByUs.set(fieldHandle, panel);
+      // 记下这一刻面板里有哪些选项文字 —— 收没收干净靠它判断（见 stillOpen）。
+      // 只留短文本：选项是给人读的短词，长段落是面板里混进来的说明文字。
+      const texts = [];
+      for (const el of optionLeaves(panel)) {
+        const t = clean(el.innerText);
+        if (t && t.length <= 24 && !texts.includes(t)) texts.push(t);
+        if (texts.length >= 8) break;                  // 记几个够判断了，不必存全表
+      }
+      panelTexts.set(panel, texts);
       return true;
     },
-    noteClosed(fieldHandle) { openedByUs.delete(fieldHandle); return true; },
+    noteClosed(fieldHandle) {
+      const panel = openedByUs.get(fieldHandle);
+      if (panel) panelTexts.delete(panel);
+      openedByUs.delete(fieldHandle);
+      return true;
+    },
 
     // 这一轮点击之后，页面到底动过没动过。
     //
@@ -768,10 +809,40 @@
     },
 
     // 自己开过、现在仍然可见的面板。这是整页收尾唯一该看的数。
+    //
+    // 判据**不看结构**：不问"我记的那个节点可见吗"（面板分好几层时记的往往是其中一层，
+    // 那一层不可见了别的层还开着），也不问"它的 portal 树里还有东西吗"（那假设了面板
+    // 一定是 portal 结构，而下一个站可能插在控件内部、或者根本不分层）。
+    //
+    // 问的是面板的**本质**：面板存在的意义就是让选项可见。所以——
+    // **开面板时读到的那些选项文字，现在在页面上还看得见吗？**
+    // 看得见就是还开着，看不见就是收了。这条和 DOM 怎么搭完全无关，
+    // 面板挂哪儿、分几层、叫什么 class 都不影响它成立。
+    //
+    // 2026-10-06 阿里实测到的那个 bug：账本说 0、页面上面板还开着 178px，
+    // 因为旧判据只问了记下的那一层的可见性。
     stillOpen() {
       const out = [];
       for (const [fieldHandle, panel] of openedByUs) {
-        if (!panel.isConnected || !visible(panel)) { openedByUs.delete(fieldHandle); continue; }
+        if (!panel.isConnected) { openedByUs.delete(fieldHandle); continue; }
+        // 开它的时候读到的选项文字（noteOpen 时记下来的）
+        const texts = panelTexts.get(panel);
+        let showing;
+        if (texts && texts.length) {
+          // 这些文字现在还在页面上可见吗。一个都见不到就是收了。
+          const seen = new Set();
+          for (const el of document.querySelectorAll('*')) {
+            if (el.children.length) continue;
+            if (!visible(el)) continue;
+            const t = clean(el.innerText);
+            if (t && texts.includes(t)) seen.add(t);
+            if (seen.size >= 2) break;                 // 见到两个就够了，不必数全
+          }
+          showing = seen.size >= Math.min(2, texts.length);
+        } else {
+          showing = visible(panel);                    // 没记下选项（老路径），退回原判据
+        }
+        if (!showing) { openedByUs.delete(fieldHandle); panelTexts.delete(panel); continue; }
         out.push({ field: fieldHandle, handle: register(panel),
                    cls: clean(panel.className).slice(0, 80) });
       }

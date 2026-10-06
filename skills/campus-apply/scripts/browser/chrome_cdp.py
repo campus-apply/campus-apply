@@ -838,7 +838,7 @@ def _panel_closed_within(tab, handle, budget=0.4):
 # 两个真实站点的结论正好相反——一个站"再点一次输入框"十次全中、"点字段标题"十次全不中，
 # 另一个站反过来。所以这是要现场试出来的，不是可以定在代码里的偏好。
 CLOSE_TRICKS = ('click-input-again', 'click-field-label', 'click-section-title',
-                'soft-click-label')
+                'soft-click-label', 'click-empty-spot')
 
 
 def _close_panels(tab, handle, budget, learned=None):
@@ -857,6 +857,7 @@ def _close_panels(tab, handle, budget, learned=None):
         'click-field-label': lambda: _click_own_label(tab, handle),
         'click-section-title': lambda: _click_section_title(tab, handle),
         'soft-click-label': lambda: _soft_click_label(tab, handle),
+        'click-empty-spot': lambda: _click_empty_spot(tab, handle),
     }
     order = list(CLOSE_TRICKS)
     if learned in actions:                                  # 本页已知有效的先试
@@ -883,6 +884,41 @@ def _own_label(tab, handle):
 def _click_own_label(tab, handle):
     """发真实鼠标事件点这个控件所在字段容器里的 label（自定义下拉常常只认这一招）。"""
     return _real_click(tab, _own_label(tab, handle))
+
+
+def _click_empty_spot(tab, handle):
+    """在面板外的空白处发一次真实鼠标点击。
+
+    这是人收起下拉最自然的动作，而且**不依赖任何站点实现**——组件库要么听
+    document 上的 mousedown、要么听 focusout，点空白处两者都会触发。
+    现有四招都在点页面里的某个元素（控件自己、字段标签、板块标题），
+    遇到"只认点面板外面"的组件就全失效（2026-10-06 阿里实测：填完面板仍开着）。
+
+    禁止 document.body.click()：那是合成事件，不带 mousedown，很多组件不认；
+    而且点 body 可能落在某个覆盖整页的透明层上。这里用真实鼠标事件点一个
+    **算出来确定没有元素挡着**的坐标，坐标由页内算、点由 CDP 发。
+    """
+    spot = _fill_call(tab, '''(() => {
+      const panel = window.__caFill.openPanelOf(%d);
+      const pr = panel ? panel.getBoundingClientRect() : null;
+      // 从视口几个位置里挑一个：不在面板上、那里最顶层的元素不是可交互控件
+      const tries = [[innerWidth - 12, innerHeight / 2], [12, innerHeight / 2],
+                     [innerWidth / 2, 8], [innerWidth - 12, 8]];
+      for (const [x, y] of tries) {
+        if (pr && x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom) continue;
+        const top = document.elementFromPoint(x, y);
+        if (top && top.closest('a,button,input,textarea,select,[role="button"]')) continue;
+        if (top && panel && panel.contains(top)) continue;
+        return {x: Math.round(x), y: Math.round(y)};
+      }
+      return null;
+    })()''' % handle)
+    if not spot:
+        raise TabError('找不到一处确定空白的位置')
+    for kind in ('mousePressed', 'mouseReleased'):
+        tab.call('Input.dispatchMouseEvent', type=kind, x=spot['x'], y=spot['y'],
+                 button='left', clickCount=1)
+    return True
 
 
 def _soft_click_label(tab, handle):
@@ -1656,6 +1692,18 @@ def cmd_probe_options(out_path, only=None):
                             tab, 'window.__caFill.optionsIn(%d)' % c['handle']) or []
                     except TabError:
                         c['options'] = []
+                # 认不准哪个是面板，但**它确实开着**——候选的选项表就是证据。
+                # 所以收面板之前先把这些选项文字告诉页内，让它据此判断收干净了没有。
+                # 不这么做的话：没 noteOpen 过 → 账本里没有 → _close_panels 第一步
+                # 查账本查不到 → 直接报 already-closed，一招都没试 → 面板留在页面上，
+                # 下一轮探测整个失真（2026-10-06 阿里实测：账本说 0、页面上还开着 178px）。
+                #
+                # 判据不依赖结构：面板存在的意义是让选项可见，所以"这些文字还看得见吗"
+                # 就是"面板还开着吗"。面板挂哪儿、分几层、什么 class 都不影响它成立。
+                seen_opts = next((c.get('options') for c in likely if c.get('options')), None)
+                if seen_opts:
+                    _fill_call(tab, 'window.__caFill.notePanelTexts(%d, %s)'
+                               % (f['handle'], json.dumps(seen_opts[:8], ensure_ascii=False)))
                 _close_panels(tab, f['handle'], 2.0, learned)
                 out.append(dict(key=key, label=f['label'], kind='unsure',
                                 note='认不准哪个是面板，没动它。候选连选项表见 candidates——'
