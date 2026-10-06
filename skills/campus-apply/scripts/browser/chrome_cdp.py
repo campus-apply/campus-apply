@@ -1598,6 +1598,23 @@ def cmd_probe_options(out_path, only=None):
             except TabError as e:
                 out.append(dict(key=key, label=f['label'], error=str(e)))
                 continue
+            # 点了却什么都没动，再点一次。
+            #
+            # 面板是靠"点击前后谁新出现了"认出来的，所以**上一轮没收干净的面板**会让
+            # 这一轮彻底失真：这个控件的面板本来就开着，这一下点击是**收起**而不是打开，
+            # watcher 自然收不到任何新节点 → 报"点了没出现面板，多半是普通文本框"。
+            # 2026-10-06 百度和阿里都卡在这一条上，而症状看着像判据失灵。
+            #
+            # 不去猜"哪个是残留面板"（试过两轮，都在误伤导航栏和整页容器）。
+            # 这里问的是一个代码真答得出的事实：**这一下点击有没有让页面动过**。
+            # 没动就说明状态和预期相反，再点一次——第一下收起、第二下才是打开。
+            # 这对正常的文本框无害：它本来就不会动，多点一下还是不动，照旧报 text?。
+            if not (_fill_call(tab, 'window.__caFill.watchedAnything()') or False):
+                _fill_call(tab, 'window.__caFill.watchStart()')
+                try:
+                    _real_click(tab, f['handle'])
+                except TabError:
+                    pass
             # 挑面板分三种结果：挑中了往下探；一个候选都不够像，那就是普通文本框；
             # 够像的有好几个而分不出来，**标成待定、把候选交出去，继续探后面的字段**。
             # 待定不中断整页——"探完再填"要的是一次探完、一次问完，每个拿不准的字段单独停

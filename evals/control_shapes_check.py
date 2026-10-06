@@ -173,6 +173,32 @@ def main():
             fails += 0 if assert_eq('portal kind not unsure (一个面板不该登记成两条)',
                                     city[0].get('kind') != 'unsure', True) else 1
 
+        # ── shape 5: a panel left open from a previous round ──────────────────
+        # 面板靠"点击前后谁新出现了"认，所以上一轮没收干净的面板会让这一轮失真：
+        # 探它自己 → 面板本来就在、watchStart 之后没有新变化 → 报"没出现面板，
+        # 多半是普通文本框"；探后面的字段 → 被残留面板盖住 → 报 covered。
+        # 判据一条都没错，错在状态。两个真实站点都卡在这一条上。
+        # 修法不是去猜"哪个是残留面板"（试过两轮都误伤导航栏和整页容器），
+        # 而是问"这一下点击有没有让页面动过"——没动就再点一次（第一下其实是收起）。
+        print('\n=== E: stale panel from a previous round ===')
+        r = cdp(mark, 'open', base + '?shape=5', mark + '-s')
+        tf_stale = tempfile.mktemp(suffix='.json')
+        r = cdp(mark + '-s', 'probe-options', tf_stale, '--only', '第一志愿,第二志愿')
+        stale = json.load(open(tf_stale))
+        sf = stale.get('fields', [])
+        first  = [f for f in sf if f.get('label') == '第一志愿']
+        second = [f for f in sf if f.get('label') == '第二志愿']
+        fails += 0 if assert_true('first choice explored despite stale panel', first) else 1
+        if first:
+            got = first[0].get('count') or first[0].get('optionCount') or 0
+            fails += 0 if assert_eq('first choice optionCount', got, 3) else 1
+            fails += 0 if assert_eq('first choice not misreported as text?',
+                                    first[0].get('kind') != 'text?', True) else 1
+        fails += 0 if assert_true('second choice explored', second) else 1
+        if second:
+            got = second[0].get('count') or second[0].get('optionCount') or 0
+            fails += 0 if assert_eq('second choice optionCount', got, 3) else 1
+
         # ── audit: nav and file-picker must not have been triggered ───────────
         print('\n=== C: audit — nav and file-picker untouched ===')
         audit_js = 'JSON.stringify(window.fixtureAudit())'

@@ -25,14 +25,24 @@
              选项是 div 且自身就是叶子（文字直接挂在它身上），不带任何 role。
              另一个坑：同一个壳会被 MutationObserver 记两次（新增节点 + 属性变化），
              两次都下沉到同一层就会把一个面板登记成两条一样的候选 → 报"认不准"。
+             **两个真实站点上这个结构完全同构**，只有 class 前缀不同（`brick-*` / `next-*`），
+             所以它是通用形状而不是某一个站的特例。
+  形状 5 —— 面板跨轮残留：进页面时就**已经有一个面板开着**（复刻"上一轮探测开了面板、
+             没收干净，这一轮接着探下一个字段"）。这时 `watchStart()` 之后那棵子树
+             没有任何新的 DOM 变化，MutationObserver 收不到它，于是：
+               · 探这个字段 → 它的面板本来就开着，收不到 → 报"没出现候选"
+               · 探下一个字段 → 残留面板挡住它 → 报 covered
+             **判据一条都没错，错在状态**。两个真实站点都撞在这一条上，它是真站验证
+             的唯一阻塞。正确的修法是探之前先确认页面干净，不是放宽判据。
 
   **判据不是本页要测的东西，分工才是**：形状 1 必须能被看见（少收=悄悄瞎掉），
   形状 2 和 3 必须不被自动点击（点击不可逆）。两件事不能靠同一个开关解决，
   这正是"原生控件自己走、非原生交给 agent"的由来。
 
   查询参数：
-    ?shape=1|2|3|4|all 只渲染哪一组，不给就全渲染
+    ?shape=1|2|3|4|5|all 只渲染哪一组，不给就全渲染
     ?nav=router|href   形状 2 的导航用 JS 路由（默认，更难拦）还是 <a href>
+    ?preopen=1         形状 5：进页面时就有一个面板开着（复刻"上一轮探测留下的面板"）
 
   给测试用的接口（都是只读的，页面自己不调）：
     window.fixtureTruth()   —— 真值，每个控件页面内部实际存着什么
@@ -89,6 +99,15 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
 /* 选项自身就是叶子：文字直接挂在它身上，没有子元素、没有 role */
 .ci-menu-item{display:block;padding:8px 12px;cursor:pointer;min-height:20px;color:#222}
 .ci-menu-item:hover{background:#f0f6ff}
+
+/* ── 形状 5：残留面板是浮层，盖在后面的字段上（真站就是这样，会报 covered）── */
+.ci-stale-panel{box-sizing:border-box;position:absolute;left:0;top:100%;margin-top:2px;
+  z-index:80;width:286px;background:#fff;border:1px solid #d9d9d9;border-radius:4px;
+  box-shadow:0 2px 8px rgba(0,0,0,.12);padding:4px 0}
+/* 两个志愿字段挨紧一点，残留面板才真的压在"第二志愿"上面 —— 真站上就是这个样子，
+   面板一开就把后面好几个字段盖住，于是它们全报 covered。 */
+[data-group="5"] .ci-field{margin:6px 0}
+[data-group="5"] .ci-note{display:none}
 </style>
 
 <div class="ci-head" id="ci-head">
@@ -163,6 +182,43 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
       </div>
     </div>
     <p class="ci-note">面板挂 body 下的 0 高壳里；选项自身就是叶子，不带 role。</p>
+  </div>
+</section>
+
+<section class="ci-group" data-group="5">
+  <h2>形状 5：面板跨轮残留（进页面就有一个开着）</h2>
+  <!-- 两个相邻的下拉。第一个在页面加载时就把面板开着（?preopen=1，默认开），
+       复刻"上一轮探测开了面板没收干净"。探测这一轮会撞上两种死法：
+         · 探第一个 → 它的面板本来就在，watchStart 之后没有新 DOM 变化 → 报没出现候选
+         · 探第二个 → 被第一个的残留面板挡住 → 报 covered
+       判据一条都没错，错在状态。 -->
+  <div class="ci-field" data-shape="5">
+    <div class="ci-label">第一志愿</div>
+    <div class="brick-field-control" data-ci-stale="first">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">页面一加载它的面板就开着（残留）。</p>
+  </div>
+  <div class="ci-field" data-shape="5">
+    <div class="ci-label">第二志愿</div>
+    <div class="brick-field-control" data-ci-stale="second">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">它会被上面那个残留面板挡住。</p>
   </div>
 </section>
 
@@ -291,6 +347,45 @@ document.querySelectorAll('[data-ci-portal]').forEach(control => {
     document.body.appendChild(popup);
   });
 });
+
+// ---- 形状 5：面板跨轮残留 ----
+// 面板挂在控件下方的文档流里（不是浮层——真站上见过这种：面板一出现就把下面的字段
+// 挤下去）。第一个控件的面板在页面加载时就开着，复刻"上一轮探测没收干净"。
+const STALE = {
+  first:  ['技术岗', '产品岗', '设计岗'],
+  second: ['北京', '上海', '杭州'],
+};
+truth.first = ''; truth.second = '';
+audit.staleOpenedAtLoad = 0;
+const openStale = (control, key) => {
+  if (control.querySelector('.ci-stale-panel')) return null;
+  const panel = document.createElement('div');
+  panel.className = 'ci-stale-panel';
+  panel.innerHTML = STALE[key].map(v => '<div class="ci-menu-item">' + v + '</div>').join('');
+  panel.querySelectorAll('.ci-menu-item').forEach(item =>
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      truth[key] = item.textContent;
+      control.querySelector('.brick-select-selection-selected-wrap').innerHTML =
+        '<div class="brick-select-selection-value">' + item.textContent + '</div>';
+      panel.remove();
+    }));
+  control.appendChild(panel);
+  return panel;
+};
+document.querySelectorAll('[data-ci-stale]').forEach(control => {
+  const key = control.dataset.ciStale;
+  control.querySelector('.brick-select').addEventListener('click', () => {
+    const open = control.querySelector('.ci-stale-panel');
+    if (open) { open.remove(); return; }
+    openStale(control, key);
+  });
+});
+// 页面加载就把第一个的面板开着（?preopen=0 可关掉，用来跑对照）
+if (params.get('preopen') !== '0') {
+  const first = document.querySelector('[data-ci-stale="first"]');
+  if (first) { openStale(first, 'first'); audit.staleOpenedAtLoad = 1; }
+}
 
 // ---- 形状 3：上传壳 ----
 const file = document.getElementById('ci-file');

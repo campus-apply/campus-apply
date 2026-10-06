@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 9;
+  const VERSION = 12;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -727,6 +727,45 @@
       return true;
     },
     noteClosed(fieldHandle) { openedByUs.delete(fieldHandle); return true; },
+
+    // 这一轮点击之后，页面到底动过没动过。
+    //
+    // 只回答这一个事实，不做任何判断——**不问"动的那个是不是面板"**，那是调用方
+    // 和 agent 的事。它存在的理由：面板靠"点击前后谁新出现了"认，所以"一下点击什么
+    // 都没动"是个关键信号，意味着状态和预期相反（最常见的是上一轮的面板还开着，
+    // 这一下其实是收起）。调用方据此再点一次，而不用去猜哪个是残留面板。
+    watchedAnything() {
+      if (watcher) watcher.takeRecords().forEach(rec => {
+        for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
+        if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+      });
+      return appeared.size > 0;
+    },
+
+    // 探一个字段之前，先确认"这次点击带来的变化"能被看见。
+    //
+    // 为什么需要这一步：面板是靠"点击前后谁新出现了"认出来的。如果上一轮探测开了面板
+    // 没收干净，这一轮：探它自己 → 面板本来就在、watchStart 之后没有新变化 → 报
+    // "没出现面板"；探后面的字段 → 残留面板挡住 → 报 covered；更隐蔽的是残留面板里的
+    // 选项各自有 cursor:pointer 和相邻文字，会被当成独立字段收进字段表。
+    // **判据一条都没错，错在状态**，2026-10-06 两个真实站点都卡在这里。
+    //
+    // **不去判断"哪个是残留面板"** —— 那和"哪个是面板"一样难猜，试过两轮都在误伤
+    // 导航栏和整页容器。改成问一个代码真答得出的问题：**这个控件现在是不是展开态**。
+    // 判据只用 W3C 的 aria-expanded：那是无障碍标准里"这个控件现在展开着"的唯一说法，
+    // 站点要让读屏软件知道状态就得写它。读不到就老实返回 null（不知道），
+    // 由调用方决定要不要继续——不猜，也不拦。
+    expandedState(handle) {
+      const el = get(handle);
+      if (!el) return { error: 'gone' };
+      // 控件自己或它最近的祖先上的 aria-expanded（组件库常挂在外层壳上）
+      for (let n = el, d = 0; n && n !== document.body && d < 4; n = n.parentElement, d++) {
+        const v = n.getAttribute && n.getAttribute('aria-expanded');
+        if (v === 'true') return { expanded: true, from: clean(n.className).slice(0, 40) };
+        if (v === 'false') return { expanded: false, from: clean(n.className).slice(0, 40) };
+      }
+      return { expanded: null, why: '页面没写 aria-expanded，读不出展开态' };
+    },
 
     // 自己开过、现在仍然可见的面板。这是整页收尾唯一该看的数。
     stillOpen() {
