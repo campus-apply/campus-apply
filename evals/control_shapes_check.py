@@ -225,6 +225,24 @@ def main():
         fails += 0 if assert_true('a printed aria-label is still trusted',
                                   any(n == '期望到岗时间' for n in names)) else 1
 
+        print('\n=== G: label/identity/probe share the visible aria-labelledby text ===')
+        r = cdp(mark, 'open', base + '?shape=7', mark + '-l')
+        tf_l = tempfile.mktemp(suffix='.json')
+        r = cdp(mark + '-l', 'survey', tf_l)
+        sl = json.load(open(tf_l))
+        lf = next((f for f in sl.get('fields', []) if f.get('label') == '获奖类别'), None)
+        fails += 0 if assert_true('outline sees the visible label', lf) else 1
+        lp = (sl.get('probe') or {}).get('controls') or []
+        fails += 0 if assert_true('probe sees the same label',
+                                  any(c.get('label') == '获奖类别' for c in lp)) else 1
+        if lf:
+            tf_ident = tempfile.mktemp(suffix='.js')
+            with open(tf_ident, 'w') as fh:
+                fh.write('JSON.stringify(window.__caFill.identify(%d))' % lf['handle'])
+            identified = json.loads(cdp(mark + '-l', 'exec', tf_ident).stdout)
+            fails += 0 if assert_eq('identity uses the same label',
+                                    identified.get('name'), '获奖类别') else 1
+
         # ── audit: nav and file-picker must not have been triggered ───────────
         print('\n=== C: audit — nav and file-picker untouched ===')
         audit_js = 'JSON.stringify(window.fixtureAudit())'

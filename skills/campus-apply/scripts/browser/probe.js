@@ -19,12 +19,10 @@
     return s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length > 0;
   };
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
-  const WRAP = '.ant-form-item, .ant-row, .el-form-item, [class*="form-item"], [class*="formItem"], [class*="FormItem"], li, tr';
   const labelOf = el => {
-    if (el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l && clean(l.innerText)) return clean(l.innerText); }
-    const wrap = el.closest(WRAP);
-    if (wrap) { const l = wrap.querySelector('label, .ant-form-item-label, [class*="label"], [class*="Label"]'); if (l && clean(l.innerText)) return clean(l.innerText).slice(0, 40); }
-    return clean(el.getAttribute('aria-label') || el.getAttribute('placeholder') || '');
+    if (!window.__caFill || !window.__caFill.describeLabel)
+      throw new Error('probe 需要同源标签库，请用 chrome_cdp.py probe 或 exec 内置 probe.js');
+    return window.__caFill.describeLabel(el).label;
   };
   const headingOf = el => {
     let n = el;

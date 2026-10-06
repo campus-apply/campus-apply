@@ -168,7 +168,9 @@
       if (own && !own.contains(el) && clean(own.innerText))
         return clean(own.innerText).slice(0, 60);
     }
-    return clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder')) || '');
+    // aria-labelledby 可以指向普通文字叶子，不要求被引用节点本身也是控件。
+    return clean(el.innerText || el.textContent
+      || el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder')) || '');
   };
 
   // ── 标签证据：代码不断定哪个是标签，把各路线索一起给出去 ────────────────────
@@ -187,10 +189,15 @@
     const ev = {};
     const r = el.getBoundingClientRect();
     // 1) 标准关联（W3C 语义，最可信，但很多自研组件库根本不用）
-    const ref = (el.getAttribute && el.getAttribute('aria-labelledby') || '').split(/\s+/)
-      .map(id => { const t = document.getElementById(id); return t ? clean(t.innerText) : ''; })
+    const refNodes = (el.getAttribute && el.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map(id => document.getElementById(id)).filter(Boolean);
+    const ref = refNodes
+      .map(node => nameOf(node, new Set([el])))
       .filter(Boolean).join(' ');
-    if (ref) ev.ariaLabelledby = ref.slice(0, 60);
+    if (ref) {
+      ev.ariaLabelledby = ref.slice(0, 60);
+      ev.ariaLabelledbyVisible = refNodes.every(visible);
+    }
     const aria = el.getAttribute && el.getAttribute('aria-label');
     if (aria) ev.ariaLabel = clean(aria).slice(0, 60);
     if (el.labels && el.labels.length)
@@ -259,10 +266,15 @@
   // （改了用户自己也填不对）；组件库写给读屏器的内部名印不出来。也不用"同一个值被几个
   // 控件共用"做判据：真标签也会重复（两条经历各有一个"年"、"月"），按重复数否会误杀。
   const bestLabel = ev => clean(
-    ev.ariaLabelledby
+    (ev.ariaLabelledbyVisible ? ev.ariaLabelledby : '')
     || (printedOnPage(ev.ariaLabel) ? ev.ariaLabel : '')
     || ev.labelFor || ev.ancestorLabel || ev.above || ev.left
     || ev.ariaLabel || '');   // 印不出来的 aria-label 仍强于空标签，排最后兜底
+
+  const describeLabel = el => {
+    const evidence = labelEvidence(el);
+    return { label: bestLabel(evidence) || nameOf(el), evidence };
+  };
 
   // ── 可点 ≠ 是表单字段 ──────────────────────────────────────────────────────
   //
@@ -428,7 +440,7 @@
         if (!visible(el)) continue;
         const r = rectOf(el);
         out.push({ handle: register(el), tag: el.tagName.toLowerCase(),
-                   type: el.getAttribute('type') || '', name: nameOf(el),
+                   type: el.getAttribute('type') || '', name: describeLabel(el).label,
                    disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
                    readonly: !!el.readOnly || el.getAttribute('aria-readonly') === 'true',
                    maxlength: el.getAttribute('maxlength'),
@@ -476,8 +488,9 @@
       // 而不用写一条"排除 img/li"的规则。
       for (const el of controlCandidates()) {
         if (!visible(el)) continue;
-        const ev = labelEvidence(el);
-        const row = { el, section: sectionOf(el), label: bestLabel(ev) || nameOf(el), labels: ev };
+        const described = describeLabel(el);
+        const ev = described.evidence;
+        const row = { el, section: sectionOf(el), label: described.label, labels: ev };
         if (el.matches(NATIVE) || hasLabelClue(ev)) rows.push(row);
         else unlabeled.push(row);
       }
@@ -589,8 +602,11 @@
     identify(handle) {
       const el = get(handle);
       if (!el) return { error: 'gone' };
-      return { name: nameOf(el), sensitive: isSensitive(el) };
+      return { name: describeLabel(el).label, sensitive: isSensitive(el) };
     },
+
+    // probe、outline和执行前身份校验共享同一份标签证据。
+    describeLabel(el) { return describeLabel(el); },
 
     // 选择器只在这里解析，之后一律按 handle。找不到返回 null，不抛。
     resolve(selector, index) {
@@ -600,7 +616,7 @@
       const pick = shown.length ? shown : list;
       const el = pick[index || 0];
       if (!el) return { error: 'not-found', matched: list.length, visible: shown.length };
-      return { handle: register(el), tag: el.tagName.toLowerCase(), name: nameOf(el),
+      return { handle: register(el), tag: el.tagName.toLowerCase(), name: describeLabel(el).label,
                visible: visible(el), disabled: !!el.disabled, readonly: !!el.readOnly,
                rect: rectOf(el), matched: list.length };
     },

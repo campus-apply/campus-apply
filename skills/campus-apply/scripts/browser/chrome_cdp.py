@@ -1901,7 +1901,11 @@ def cmd_exec(js_path):
         print(f'ERR_NO_FILE {js_path}')
         return 2
     with open(js_path, encoding='utf-8') as f:
-        code, out = run_js(f.read())
+        source = f.read()
+    # 内置只读探测也共享字段命名；不改变任意用户脚本的执行方式。
+    if os.path.realpath(js_path) == os.path.realpath(os.path.join(HERE, 'probe.js')):
+        source = _fill_lib() + '\n;\n' + source
+    code, out = run_js(source)
     if out is not None:
         print(out)
     return code
