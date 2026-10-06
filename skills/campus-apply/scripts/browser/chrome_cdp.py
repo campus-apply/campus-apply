@@ -1310,6 +1310,25 @@ def cmd_plan_skeleton(out_path, skip_ok=None, from_options=None):
                 probed[r.get('key')] = dict(options=r['options'],
                                             kind=r.get('kind'),
                                             revealed=r.get('revealed') or [])
+                continue
+            # kind=unsure 的字段：代码没挑出哪个是面板，但每个候选的**完整选项表**
+            # 都读出来了（见 probe-options 的 ambiguous 分支）。这里把它接上——
+            # 不接的话 unsure 这条出口就是死路：agent 看完证据判断出来了，
+            # 下游却不收货，只能再跑一次 --only，而再跑照样 unsure。
+            #
+            # **代码在这里不做判断**：只有当几个候选的选项表**完全一样**时才用它，
+            # 那说明是同一个面板被 MutationObserver 记了多次（新增节点 + 属性变化
+            # 各一条），不存在"挑哪个"的问题。真有分歧（选项表不同）就仍然留空，
+            # 交给 agent 看——那才是需要判断的情况，代码不替它定。
+            cands = r.get('candidates') or []
+            opts = [c.get('options') or [] for c in cands]
+            if opts and all(o for o in opts) and all(o == opts[0] for o in opts):
+                # kind 不写 'unsure'——那说的是"代码认不准哪个是面板"，不是控件类型。
+                # 有选项表就是个要点开挑的控件，kind 留给 plan-skeleton 按 DOM 定。
+                probed[r.get('key')] = dict(options=opts[0],
+                                            kind=None,
+                                            revealed=r.get('revealed') or [],
+                                            from_unsure=True)
 
     def go(tab):
         with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
