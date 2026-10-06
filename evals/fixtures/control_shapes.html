@@ -40,7 +40,7 @@
   这正是"原生控件自己走、非原生交给 agent"的由来。
 
   查询参数：
-    ?shape=1|2|3|4|5|all 只渲染哪一组，不给就全渲染
+    ?shape=1|2|3|4|5|6|all 只渲染哪一组，不给就全渲染
     ?nav=router|href   形状 2 的导航用 JS 路由（默认，更难拦）还是 <a href>
     ?preopen=1         形状 5：进页面时就有一个面板开着（复刻"上一轮探测留下的面板"）
 
@@ -90,6 +90,12 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
 /* 普通原生输入框，做对照：它在任何版本的选择器下都看得见 */
 .ci-text{box-sizing:border-box;font:inherit;height:36px;width:280px;padding:6px 10px;
   border:1px solid #d9d9d9;border-radius:4px}
+
+/* ── 形状 6：组件库塞在下拉里的隐藏 input，带内部名 aria-label ──
+   实测真站是 1px 宽 × 30px 高、没有 display:none、没有 opacity:0（所以 visible() 判它可见），
+   值由外面那层 placeholder/selected-wrap 显示。几何照抄，否则测不出 nameOf 的行为。 */
+.ci-hidden-input{position:absolute;width:1px;height:30px;padding:0;margin:0;border:0;
+  color:transparent;background:transparent;outline:none}
 
 /* ── 形状 4：portal 面板。壳挂 body 下、自身高度 0，面板是里面那个 absolute 子节点 ── */
 .ci-popup{position:static;width:100%;height:0}        /* 实测 1200×0 —— 关键就在这个 0 */
@@ -161,6 +167,58 @@ h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:28px}
     <div class="ci-label">姓名</div>
     <input type="text" class="ci-text" id="ci-name" data-ci-text="name" placeholder="请输入真实姓名">
     <p class="ci-note">原生对照组：任何版本都看得见它，标签应读成"姓名"而不是占位符。</p>
+  </div>
+</section>
+
+<section class="ci-group" data-group="6">
+  <h2>形状 6：aria-label 是组件库内部名（真站实测：28 个控件共用同一个内部名）</h2>
+  <!-- 真站实测结构（阿里巴巴校招简历页）：组件库给每个下拉的隐藏 input 写 aria-label="select"，
+       整页 28 个控件共用这一个值，还有 "number picker"、"清除"。aria-label 按 W3C 排在
+       可访问名称第一位，所以照搬标准顺序会让 24 个字段的名字全变成 "select"：
+         ① fill 的 expect_label 校验把 20 个本来能填的字段全挡掉
+         ② 报错信息 20 行都叫 "select"，人分不清是哪个字段
+         ③ 语义坐标的"同标签第几个"退化成纯位置下标表
+       判据不能是"aria-label 等于 select 就忽略"（那是名单，换个组件库就失手），
+       要用人类感知那条不变量：**人认字段靠页面上印出来的字**，组件库内部名印不出来。 -->
+  <div class="ci-field" data-shape="6">
+    <label class="ci-label" for="ci-s6-hometown">家庭所在城市</label>
+    <div class="brick-field-control" data-ci-select="hometown">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <!-- 真站就是这样：1px 宽的隐藏 input 同时带着组件库内部名和真 label 关联。
+               两路证据都在，只是 bestLabel 把 ariaLabel 排在 labelFor 前面才取错。 -->
+          <input id="ci-s6-hometown" aria-label="select" class="ci-hidden-input" readonly>
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">标签应读成"家庭所在城市"，不是 aria-label 里的那个组件库内部名。</p>
+  </div>
+  <div class="ci-field" data-shape="6">
+    <label class="ci-label" for="ci-s6-degree">最高学历</label>
+    <div class="brick-field-control" data-ci-select="degree6">
+      <div class="brick-select">
+        <div class="brick-select-selection">
+          <input id="ci-s6-degree" aria-label="select" class="ci-hidden-input" readonly>
+          <div class="brick-select-selection-selected-wrap">
+            <div class="brick-select-selection-placeholder">请选择</div>
+          </div>
+          <div class="brick-select-arrow">⌄</div>
+        </div>
+      </div>
+    </div>
+    <p class="ci-note">同一个 aria-label 值被第二个控件复用——这是组件库内部名的特征。</p>
+  </div>
+  <div class="ci-field" data-shape="6">
+    <div class="ci-label">期望到岗时间</div>
+    <!-- 反向对照：aria-label 写的是真标签且页面上印着它，这一条必须照常采信，
+         否则这道修正就从"去掉内部名"变成"把所有 aria-label 都否掉"。 -->
+    <input aria-label="期望到岗时间" class="ci-text"
+           data-ci-text="aria-ok" placeholder="请输入">
+    <p class="ci-note">对照组：aria-label 写的就是上面那个标签节点的原文，必须照常采信。</p>
   </div>
 </section>
 

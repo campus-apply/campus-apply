@@ -1119,9 +1119,12 @@ def _fill_one(tab, item, waits, learned=None):
                                        % (handle, panel['handle']))
             how, closed = _close_panels(tab, handle, waits['panel'], learned)
             record['closed_by'] = how
-            if not closed:
-                record['why'] = '选完了但面板收不起来'
-                return False, record
+            record['panel_left_open'] = not closed
+            # 面板收不掉**不等于**值没写进去：上面已经点中了选项，值多半已经落地。
+            # 原来这里直接 return False 跳过回读，于是报告说"没动它"而页面上有值——
+            # 阿里实测两个字段这么写进去的，其中一个还是错值（计划要硕士，页面显示博士），
+            # 报告里 filled=0。这正是 skill 红线"判不出不等于不成立"反过来的那一面：
+            # 把"收不掉面板"当成了"没写入"。所以照常回读，把两件事分开报。
             if kind == 'cascader' and isinstance(want, list):
                 want = item.get('display') or ' / '.join(want)
 
@@ -1135,6 +1138,11 @@ def _fill_one(tab, item, waits, learned=None):
         record['why'] = ('回读不一致：显示/DOM 读到 '
                          + repr(check['display'] if kind != 'text' else check['dom_len'])
                          + (('；页面报错：' + '、'.join(check['errors'])) if check['errors'] else ''))
+        return False, record
+    if record.get('panel_left_open'):
+        # 值对了但面板还开着：仍然算没做完（开着的面板会盖住后面的字段，下一个字段会连环失败），
+        # 但要说清"值已经写进去并回读一致"，调用方才知道不必重填、只需收面板。
+        record['why'] = '值已写入并回读一致，但面板收不起来（后面的字段可能被它盖住）'
         return False, record
     record['status'] = 'filled'
     return True, record
@@ -2391,7 +2399,10 @@ if __name__ == '__main__':
         sys.exit(_code)
     finally:
         if os.environ.get('CA_TIMING_FILE'):
-            write_timing(dict(command=(sys.argv[1:] or ['?'])[0],
+            # 子命令名要走 take_options 剥掉选项再取——文档明说"选项可以放在子命令前后任意位置"，
+            # 直接取 sys.argv[1] 时 `--mark xxx survey` 这种（文档自己的示例写法）会记成 "--mark"，
+            # 于是 idle_report 的分项统计全并到一个假命令名下，"哪条命令慢"就看不出来了。
+            write_timing(dict(command=(take_options(sys.argv[1:]) or ['?'])[0],
                               started_at=round(_started_wall, 3),
                               elapsed_seconds=round(time.monotonic() - _started, 3),
                               exit_code=_code))

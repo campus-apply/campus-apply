@@ -10,7 +10,7 @@
   // 但**版本变了就让它重建** —— 否则改完这个文件必须开新标签页才能生效，而开新标签
   // 在真实站点上会丢登录态、会被会话限制挡（2026-10-06 在百度上实测到）。
   // 版本号跟着这个文件的语义走，改了判据就加一。
-  const VERSION = 14;
+  const VERSION = 15;
   if (window.__caFill && window.__caFill.version === VERSION) return;
 
   const store = new Map();          // handle → 元素
@@ -124,6 +124,27 @@
     return out;
   };
 
+  // 这个字符串是页面上印给人看的吗。**判据来自人类感知，不是名单**：用户认哪个字段靠的
+  // 就是页面上印出来的那几个字，站点想改也改不了（改了用户自己也填不对）。反过来，
+  // 组件库给 aria-label 填的内部名（实测阿里 28 个控件共用 "select"，还有 "number picker"、
+  // "清除"）印不出来——它们是写给开发者和读屏器的，不是给看得见的用户认字段用的。
+  // 给 bestLabel 用，判 aria-label 该不该排在位置线索前面。
+  const printedOnPage = txt => {
+    const want = clean(txt);
+    if (!want) return false;
+    for (const n of document.querySelectorAll('*')) {
+      if (n.children.length) continue;              // 只看叶子，容器的 innerText 是拼起来的
+      if (!visible(n)) continue;
+      // 要整段相等，不能用 includes：标签是独占一个节点印出来的（"家庭所在城市" 那个
+      // label 的全部内容就是这五个字）。用 includes 的话，任何一段正文里恰好提到这个词
+      // 就算"印在页面上"——自建 fixture 的说明文字里写了 "select" 就把自己的测试判绿了，
+      // 真站上同理（页面上的提示语提到字段名是常事）。短标签尤其容易撞。
+      const t = clean(n.innerText || n.textContent);
+      if (t && t === want) return true;
+    }
+    return false;
+  };
+
   // 可访问名称：aria-labelledby → aria-label → 关联 label → 子文本 → title → placeholder，递归防环。
   // 比按框架 class 猜标签稳，同一套算法也给 probe 用。
   const nameOf = (el, seen) => {
@@ -223,8 +244,25 @@
   // 从证据里挑一个最可能的标签，**供排序和显示用**；挑不准返回空串而不是硬猜。
   // 顺序：标准关联 > 位置线索 > 不要控件内文字。把 innerText/placeholder 排除在外，
   // 因为"请选择"这种占位符、"中国"这种已选值当标签会让 --only 和语义坐标全部对不上。
-  const bestLabel = ev => clean(ev.ariaLabelledby || ev.ariaLabel || ev.labelFor
-    || ev.ancestorLabel || ev.above || ev.left || '');
+  //
+  // `aria-label` 只在它确实是**印给人看的那几个字**时才排在前面。实测阿里巴巴校招简历页，
+  // 组件库给每个下拉里的隐藏 input 写 `aria-label="select"`，整页 28 个控件共用这一个值
+  // （另有 "number picker"、"清除"）。于是 24 个字段的 label 全成了 "select"，后果三条：
+  //   ① `fill` 的 `expect_label` 身份校验把 20 个本来能填的字段全挡掉（实测 fill-1）
+  //   ② 报错信息 20 行都叫 "select"，人根本分不清是哪个字段（实测 fill-2）
+  //   ③ 语义坐标的"同标签第几个"退化成一张纯位置下标表，而那正是它要替掉的东西
+  // 而同一个字段的 `labelFor` / `above` 两路证据**都是对的**（"家庭所在城市"），
+  // 只是排在 ariaLabel 后面没被取用。
+  //
+  // 判据不是"等于 select 就忽略"——那是名单，换个组件库（"picker"、"combobox"）又失手。
+  // 用人类感知那条不变量：**用户认哪个字段靠的就是页面上印出来的字**，站点想改也不能改
+  // （改了用户自己也填不对）；组件库写给读屏器的内部名印不出来。也不用"同一个值被几个
+  // 控件共用"做判据：真标签也会重复（两条经历各有一个"年"、"月"），按重复数否会误杀。
+  const bestLabel = ev => clean(
+    ev.ariaLabelledby
+    || (printedOnPage(ev.ariaLabel) ? ev.ariaLabel : '')
+    || ev.labelFor || ev.ancestorLabel || ev.above || ev.left
+    || ev.ariaLabel || '');   // 印不出来的 aria-label 仍强于空标签，排最后兜底
 
   // ── 可点 ≠ 是表单字段 ──────────────────────────────────────────────────────
   //

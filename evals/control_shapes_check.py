@@ -199,6 +199,32 @@ def main():
             got = second[0].get('count') or second[0].get('optionCount') or 0
             fails += 0 if assert_eq('second choice optionCount', got, 3) else 1
 
+        # ── shape 6: aria-label carries a component-library internal name ─────
+        # 真站实测（阿里巴巴校招简历页）：组件库给每个下拉里的隐藏 input 写
+        # aria-label="select"，整页 28 个控件共用这一个值。aria-label 按 W3C 排在
+        # 可访问名称第一位，照搬顺序就让 24 个字段的名字全变成 "select"——
+        # fill 的 expect_label 把 20 个本来能填的字段挡掉，报错 20 行都叫 "select"。
+        # 判据不是"等于 select 就忽略"（那是名单），而是人类感知那条不变量：
+        # **人认字段靠页面上印出来的字**，组件库内部名印不出来。
+        # 对照组那一条必须照常采信 aria-label，否则就从"去掉内部名"变成"全盘否掉 aria-label"。
+        print('\n=== F: aria-label that is a library internal name ===')
+        r = cdp(mark, 'open', base + '?shape=6', mark + '-a')
+        tf_a = tempfile.mktemp(suffix='.json')
+        r = cdp(mark + '-a', 'survey', tf_a)
+        sa = json.load(open(tf_a))
+        af = sa.get('fields', [])
+        names = [(f.get('labels') or {}).get('name') or (f.get('labels') or {}).get('above')
+                 for f in af]
+        fails += 0 if assert_eq('no field is named by the internal name "select"',
+                                sum(1 for n in names if n == 'select'), 0) else 1
+        fails += 0 if assert_true('hometown reads its printed label',
+                                  any(n and '家庭所在城市' in n for n in names)) else 1
+        fails += 0 if assert_true('degree reads its printed label',
+                                  any(n and '最高学历' in n for n in names)) else 1
+        # 反向对照：aria-label 印在页面上时仍然采信它
+        fails += 0 if assert_true('a printed aria-label is still trusted',
+                                  any(n == '期望到岗时间' for n in names)) else 1
+
         # ── audit: nav and file-picker must not have been triggered ───────────
         print('\n=== C: audit — nav and file-picker untouched ===')
         audit_js = 'JSON.stringify(window.fixtureAudit())'
