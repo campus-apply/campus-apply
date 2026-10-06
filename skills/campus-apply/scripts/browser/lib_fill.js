@@ -428,11 +428,29 @@
 
   // 自己点开过、还没收掉的面板。整页收尾只看这一本账，不看"页面上有多少节点像面板"——
   // 行内常驻容器永远像面板，拿它当失败判据会让某些站永远填不完。
-  const openedByUs = new Map();       // handle → 面板元素
+  const openedByUs = new Map();       // field handle → 实际观察节点（含未决候选）
+  const confirmedByUs = new Map();    // field handle → 已明确选定的面板节点
   // 开面板那一刻它里面有哪些选项文字。收没收干净就靠它判断——**判据和 DOM 结构无关**：
   // 面板存在的意义是让选项可见，所以"这些文字还看得见吗"就是"面板还开着吗"。
   // 面板挂哪儿、分几层、用什么 class 都不影响这条成立。
   const panelTexts = new WeakMap();   // 面板元素 → 开它时读到的选项文字
+  function rememberPanelObservation(fieldHandle, panelHandle) {
+    const panel = get(panelHandle);
+    if (!panel) return false;
+    const panels = openedByUs.get(fieldHandle) || [];
+    if (!panels.includes(panel)) panels.push(panel);
+    openedByUs.set(fieldHandle, panels);
+    // 记下这一刻面板里有哪些选项文字 —— 收没收干净靠它判断（见 stillOpen）。
+    // 记完整实际文字；学校/组织名称等选项可以很长，不能按长度猜它不是选项。
+    const texts = [];
+    for (const el of optionLeaves(panel)) {
+      const t = clean(el.innerText);
+      if (t && !texts.includes(t)) texts.push(t);
+    }
+    panelTexts.set(panel, texts);
+    return true;
+  }
+
 
   const api = {
     // 整页控件表：一次调用读完，别一个字段一次往返。
@@ -825,31 +843,23 @@
     },
 
     noteCandidates(fieldHandle, panelHandles) {
-      // 记录实际观察到的节点，不拿字段节点替代body下的portal。
-      for (const handle of panelHandles) api.noteOpen(fieldHandle, handle);
+      // 保存实际观察节点，身份仍未判定；不把它们宣布为面板。
+      for (const handle of panelHandles) rememberPanelObservation(fieldHandle, handle);
       return true;
     },
 
     noteOpen(fieldHandle, panelHandle) {
-      const panel = get(panelHandle);
-      if (!panel) return false;
-      const panels = openedByUs.get(fieldHandle) || [];
-      if (!panels.includes(panel)) panels.push(panel);
-      openedByUs.set(fieldHandle, panels);
-      // 记下这一刻面板里有哪些选项文字 —— 收没收干净靠它判断（见 stillOpen）。
-      // 记完整实际文字；学校/组织名称等选项可以很长，不能按长度猜它不是选项。
-      const texts = [];
-      for (const el of optionLeaves(panel)) {
-        const t = clean(el.innerText);
-        if (t && !texts.includes(t)) texts.push(t);
-      }
-      panelTexts.set(panel, texts);
+      if (!rememberPanelObservation(fieldHandle, panelHandle)) return false;
+      const selected = confirmedByUs.get(fieldHandle) || new Set();
+      selected.add(get(panelHandle));
+      confirmedByUs.set(fieldHandle, selected);
       return true;
     },
     noteClosed(fieldHandle) {
       const panels = openedByUs.get(fieldHandle) || [];
       for (const panel of panels) panelTexts.delete(panel);
       openedByUs.delete(fieldHandle);
+      confirmedByUs.delete(fieldHandle);
       return true;
     },
 
@@ -966,10 +976,11 @@
         if (!showing) { panelTexts.delete(panel); continue; }
         remaining.push(panel);
         out.push({ field: fieldHandle, handle: register(panel),
+                   identity: confirmedByUs.get(fieldHandle)?.has(panel) ? "confirmed-panel" : "candidate",
                    cls: clean(panel.className).slice(0, 80) });
         }
         if (remaining.length) openedByUs.set(fieldHandle, remaining);
-        else openedByUs.delete(fieldHandle);
+        else { openedByUs.delete(fieldHandle); confirmedByUs.delete(fieldHandle); }
       }
       return out;
     },

@@ -834,9 +834,11 @@ def _panel_for(tab, handle, budget, note=True, selector=None):
         else:
             panel, why = picked, 'ok'
     if note:
-        noted = [panel] if panel else [c for c in candidates if c.get('optionCount')]
-        _fill_call(tab, 'window.__caFill.noteCandidates(%d, %s)' %
-                   (handle, json.dumps([c['handle'] for c in noted])))
+        if panel:
+            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
+        else:
+            _fill_call(tab, 'window.__caFill.noteCandidates(%d, %s)' %
+                       (handle, json.dumps([c['handle'] for c in candidates if c.get('optionCount')])))
     return dict(panel=panel, reason=why, candidates=candidates)
 
 
@@ -960,6 +962,11 @@ def _close_panels(tab, handle, budget, learned=None):
         if closed:
             _fill_call(tab, 'window.__caFill.noteClosed(%d)' % handle)
             return name, True
+    remaining = [p for p in (_fill_call(tab, 'window.__caFill.stillOpen()') or [])
+                 if p.get('field') == handle]
+    if remaining and all(p.get('identity') == 'candidate' for p in remaining):
+        tab.close_candidates = _candidate_evidence(tab, remaining)
+        return 'unresolved-candidates', None
     return 'none', False
 
 
@@ -1496,9 +1503,12 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
             still = _fill_call(tab, 'window.__caFill.stillOpen()') or []
         except TabError as e:
             lost = str(e)
-        left = None if lost else len(still)
+        confirmed = [p for p in still if p.get('identity', 'confirmed-panel') == 'confirmed-panel']
+        unresolved = _candidate_evidence(tab, [p for p in still if p.get('identity') == 'candidate']) if not lost else []
+        left = None if lost else len(confirmed)
         report = dict(plan=os.path.basename(plan_path), total=len(items), filled=filled,
-                      open_panels=left, open_panel_fields=[p.get('field') for p in still],
+                      open_panels=left, open_panel_fields=[p.get('field') for p in confirmed],
+                      unresolved_panel_candidates=unresolved,
                       close_trick=learned, context_lost=lost,
                       elapsed_seconds=round(time.monotonic() - started, 3), fields=records,
                       needs_observation=bool(changes), structure_changes=changes)
@@ -1515,6 +1525,9 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
             return 1
         if left:
             print(f'ERR_PANELS 我们开的面板还有 {left} 个没收掉')
+            return 1
+        if unresolved:
+            print('ERR_PANEL_CANDIDATES 仍有未决候选，不等于已打开面板；请agent核对完整证据或主动截图')
             return 1
         if changes:
             print('OBSERVE 字段节点或集合已变化：已执行结果保留，剩余计划未执行；agent先survey/主动截图，再补增量计划')
@@ -1928,8 +1941,11 @@ def cmd_probe_options(out_path, only=None):
             time.sleep(random.uniform(0.2, 0.5))
         still = _fill_call(tab, 'window.__caFill.stillOpen()') or []
         where = _fill_call(tab, 'location.href')
+        confirmed = [p for p in still if p.get('identity', 'confirmed-panel') == 'confirmed-panel']
+        unresolved = _candidate_evidence(tab, [p for p in still if p.get('identity') == 'candidate'])
         report = dict(url=where, close_trick=learned,
-                      open_panels=len(still), unsure=unsure, fields=out)
+                      open_panels=len(confirmed), unresolved_panel_candidates=unresolved,
+                      unsure=unsure, fields=out)
         try:
             with open(out_path, 'w', encoding='utf-8') as fh:
                 json.dump(report, fh, ensure_ascii=False, indent=1)
@@ -1962,10 +1978,13 @@ def cmd_probe_options(out_path, only=None):
             print('  看一眼就能定的话，用 --only 单独探它；拿不准就截一张图'
                   '（screenshot）看看那个控件点开长什么样，别猜。')
         if any(r.get('panel_status_unknown') for r in out):
-            print('OBSERVE 关闭动作后出现新候选，不能凭旧节点消失宣称关闭；请主动截图并看close_candidates')
+            print('OBSERVE 面板关闭状态未确认；请agent查看close_candidates或主动截图，不把候选当已确认面板')
             return 1
-        if still:
-            print(f'ERR_PANELS 我们开的面板还有 {len(still)} 个没收掉')
+        if confirmed:
+            print(f'ERR_PANELS 已确认面板还有 {len(confirmed)} 个没收掉')
+            return 1
+        if unresolved:
+            print('ERR_PANEL_CANDIDATES 仍有未决候选，请agent查看完整证据或主动截图')
             return 1
         return 0
 
