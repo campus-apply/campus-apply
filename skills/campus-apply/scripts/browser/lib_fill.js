@@ -325,7 +325,7 @@
   // 照样全收进来——逐级点开和并排两级的区别交给调用方，这里只负责"这个面板里有哪些能点的"。
   const optionLeaves = panel => {
     const out = [];
-    for (const el of panel.querySelectorAll('*')) {
+    for (const el of [panel, ...panel.querySelectorAll('*')]) {
       if (el.children.length) continue;                  // 只要叶子
       if (!clean(el.textContent)) continue;              // 要有文字
       if (!visible(el)) continue;
@@ -367,22 +367,24 @@
           if (node.nodeType === 1) appeared.add(node);
         if (rec.type === 'attributes' && rec.target.nodeType === 1)
           appeared.add(rec.target);
+        if (rec.type === 'characterData' && rec.target.parentElement)
+          appeared.add(rec.target.parentElement);
       }
     });
     watcher.observe(document.documentElement, {
       childList: true, subtree: true,
-      attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+      attributes: true, characterData: true,
     });
   };
   const watchStop = () => {
     if (watcher) { watcher.takeRecords(); watcher.disconnect(); watcher = null; }
   };
-  // 取走这一轮动过、现在可见、够大的节点。同一棵树里只留最外层那个：两个都是这一轮动过的，
-  // 按血缘去重不会误伤常驻容器。
+  // 取走这一轮动过、现在可见、够大的节点。父子都保留，身份仅按当前DOM节点去重；是否同一个视觉面板交给agent。
   const watchTake = () => {
     if (watcher) watcher.takeRecords().forEach(rec => {
       for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
       if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+      if (rec.type === 'characterData' && rec.target.parentElement) appeared.add(rec.target.parentElement);
     });
     // 新插的节点和改过属性的节点都算候选，这里**不筛**。曾经按"点击前不可见、现在可见"
     // 筛过一道，那条规则会杀掉"面板本来就可见、点击后才填进选项"的站。
@@ -396,12 +398,9 @@
     const out = [];
     for (const el of fresh) {
       const r = rectOf(el);
-      // 自己就有尺寸的：照旧只留最外层（同一棵树里外层代表这个面板）
+      // 自己有尺寸的节点直接作为观察证据，不按祖先关系删节点
       if (r.w >= 20 && r.h >= 10) {
-        if (fresh.some(other => other !== el && other.contains(el)
-                                && (() => { const o = rectOf(other);
-                                            return o.w >= 20 && o.h >= 10; })())) continue;
-        out.push(el);
+        if (!out.includes(el)) out.push(el);
         continue;
       }
       // 自己没尺寸的壳：**把里面有尺寸的那一层捞出来**，不要整个丢掉。
@@ -416,7 +415,6 @@
         // 同一层就会把一个面板登记成两条一样的候选，分数相同 → 报"认不准"，
         // 而其实只有一个面板。按元素去重，不按记录条数。
         if (!out.includes(kid)) out.push(kid);
-        break;                                     // 每个壳只取最外面那一层
       }
     }
     return out;
@@ -776,6 +774,7 @@
       }).sort((a, b) => b.score - a.score);
       return scored.map(s => ({
         handle: register(s.el), rect: s.rect,
+        id: s.el.id || '', tag: s.el.tagName.toLowerCase(), role: s.el.getAttribute('role'),
         score: Math.round(s.score * 100) / 100,
         cls: clean(s.el.className).slice(0, 80) || s.el.tagName,
         floating: s.floating, optionCount: s.optionCount,
@@ -795,8 +794,12 @@
     // 进这本账的面板由调用方挑定——挑准了是调用方的责任，这里只负责记。
     // 这个字段现在开着的面板元素（给"点空白处"用，让它知道哪块地方要避开）。
     openPanelOf(fieldHandle) {
-      const panel = openedByUs.get(fieldHandle);
-      return panel && panel.isConnected ? panel : null;
+      const panels = openedByUs.get(fieldHandle) || [];
+      return panels.find(panel => panel.isConnected && visible(panel)) || null;
+    },
+
+    openPanelsOf(fieldHandle) {
+      return (openedByUs.get(fieldHandle) || []).filter(panel => panel.isConnected);
     },
 
     // 认不准哪个是面板、但面板确实开着时（probe-options 的 unsure 分支）：
@@ -807,33 +810,38 @@
     // 面板留在页面上，下一轮探测整个失真。
     // 这里记的是**选项文字**而不是某个节点，所以不依赖面板是什么结构。
     notePanelTexts(fieldHandle, texts) {
-      const el = get(fieldHandle);
-      if (!el || !Array.isArray(texts)) return false;
-      // 以字段自己当"面板"记账：收面板的几招都是按字段 handle 操作的，
-      // 而判断收没收干净只看那些选项文字还在不在。
-      openedByUs.set(fieldHandle, el);
-      panelTexts.set(el, texts.filter(t => typeof t === 'string' && t && t.length <= 24));
+      const panels = openedByUs.get(fieldHandle);
+      if (!panels || !Array.isArray(texts)) return false;
+      for (const panel of panels)
+        panelTexts.set(panel, texts.filter(t => typeof t === 'string' && t));
+      return true;
+    },
+
+    noteCandidates(fieldHandle, panelHandles) {
+      // 记录实际观察到的节点，不拿字段节点替代body下的portal。
+      for (const handle of panelHandles) api.noteOpen(fieldHandle, handle);
       return true;
     },
 
     noteOpen(fieldHandle, panelHandle) {
       const panel = get(panelHandle);
       if (!panel) return false;
-      openedByUs.set(fieldHandle, panel);
+      const panels = openedByUs.get(fieldHandle) || [];
+      if (!panels.includes(panel)) panels.push(panel);
+      openedByUs.set(fieldHandle, panels);
       // 记下这一刻面板里有哪些选项文字 —— 收没收干净靠它判断（见 stillOpen）。
-      // 只留短文本：选项是给人读的短词，长段落是面板里混进来的说明文字。
+      // 记完整实际文字；学校/组织名称等选项可以很长，不能按长度猜它不是选项。
       const texts = [];
       for (const el of optionLeaves(panel)) {
         const t = clean(el.innerText);
-        if (t && t.length <= 24 && !texts.includes(t)) texts.push(t);
-        if (texts.length >= 8) break;                  // 记几个够判断了，不必存全表
+        if (t && !texts.includes(t)) texts.push(t);
       }
       panelTexts.set(panel, texts);
       return true;
     },
     noteClosed(fieldHandle) {
-      const panel = openedByUs.get(fieldHandle);
-      if (panel) panelTexts.delete(panel);
+      const panels = openedByUs.get(fieldHandle) || [];
+      for (const panel of panels) panelTexts.delete(panel);
       openedByUs.delete(fieldHandle);
       return true;
     },
@@ -848,6 +856,7 @@
       if (watcher) watcher.takeRecords().forEach(rec => {
         for (const node of rec.addedNodes) if (node.nodeType === 1) appeared.add(node);
         if (rec.type === 'attributes' && rec.target.nodeType === 1) appeared.add(rec.target);
+        if (rec.type === 'characterData' && rec.target.parentElement) appeared.add(rec.target.parentElement);
       });
       return appeared.size > 0;
     },
@@ -892,8 +901,10 @@
     // 因为旧判据只问了记下的那一层的可见性。
     stillOpen() {
       const out = [];
-      for (const [fieldHandle, panel] of openedByUs) {
-        if (!panel.isConnected) { openedByUs.delete(fieldHandle); continue; }
+      for (const [fieldHandle, panels] of openedByUs) {
+        const remaining = [];
+        for (const panel of panels) {
+        if (!panel.isConnected) { panelTexts.delete(panel); continue; }
         // 开它的时候读到的选项文字（noteOpen 时记下来的）
         const texts = panelTexts.get(panel);
         let showing;
@@ -941,13 +952,17 @@
             if (seen.size >= 2) break;                 // 见到两个就够了，不必数全
           }
           // 整块都不可见时子树里一个叶子也读不到，上面自然得 0 —— 那就是"收了"。
-          showing = seen.size >= Math.min(2, texts.length);
+          showing = seen.size > 0 || optionLeaves(panel).length > 0;
         } else {
           showing = visible(panel);                    // 没记下选项（老路径），退回原判据
         }
-        if (!showing) { openedByUs.delete(fieldHandle); panelTexts.delete(panel); continue; }
+        if (!showing) { panelTexts.delete(panel); continue; }
+        remaining.push(panel);
         out.push({ field: fieldHandle, handle: register(panel),
                    cls: clean(panel.className).slice(0, 80) });
+        }
+        if (remaining.length) openedByUs.set(fieldHandle, remaining);
+        else openedByUs.delete(fieldHandle);
       }
       watchStop();
       return out;
@@ -963,6 +978,13 @@
         if (text && !seen.includes(text)) seen.push(text);
       }
       return seen;
+    },
+
+    optionEvidence(panelHandle) {
+      const panel = get(panelHandle);
+      if (!panel) return [];
+      return optionLeaves(panel).map(el => ({ handle: register(el),
+        id: el.id || '', tag: el.tagName.toLowerCase(), label: clean(el.innerText), rect: rectOf(el) }));
     },
 
     // 这个面板里的选项分成几组并排的容器。两组以上说明是多级控件，而且两级同时在一个面板里
@@ -998,7 +1020,34 @@
         const all = optionLeaves(panel).map(e => clean(e.innerText)).filter(Boolean).slice(0, 40);
         return { error: 'no-option', available: all };
       }
-      return { handle: register(hits[0].el), label: hits[0].label, count: hits.length };
+      if (hits.length > 1) return {
+        error: 'ambiguous-option', count: hits.length,
+        candidates: hits.map(hit => ({ handle: register(hit.el), label: hit.label, rect: rectOf(hit.el) })),
+      };
+      return { handle: register(hits[0].el), label: hits[0].label, count: 1 };
+    },
+
+    panelChoice(selector) {
+      let nodes;
+      try { nodes = [...document.querySelectorAll(selector)].filter(visible); }
+      catch (e) { return { error: 'invalid-selector', candidates: [] }; }
+      const candidates = nodes.map(el => ({ handle: register(el), cls: clean(el.className),
+        rect: rectOf(el), optionCount: optionLeaves(el).length }));
+      if (nodes.length !== 1) return { error: 'not-unique', candidates };
+      if (!candidates[0].optionCount) return { error: 'no-visible-options', candidates };
+      return candidates[0];
+    },
+
+    optionChoice(panelHandle, text, selector) {
+      const panel = get(panelHandle);
+      if (!panel) return { error: 'panel-gone', candidates: [] };
+      let nodes;
+      try { nodes = [...panel.querySelectorAll(selector)].filter(visible); }
+      catch (e) { return { error: 'invalid-selector', candidates: [] }; }
+      const candidates = nodes.map(el => ({ handle: register(el), label: clean(el.innerText), rect: rectOf(el) }));
+      if (nodes.length !== 1 || clean(nodes[0].innerText) !== clean(text))
+        return { error: 'invalid-option-choice', candidates };
+      return { handle: register(nodes[0]), label: clean(nodes[0].innerText), count: 1 };
     },
 
     // 文本写入的标准序列：原型 setter → input → change → blur → focusout。
@@ -1037,16 +1086,40 @@
       return { ok: after === !!want, changed: true, checked: after };
     },
 
-    nativeSelect(handle, value) {
+    nativeOptions(handle) {
+      const el = get(handle);
+      if (!el || el.tagName !== 'SELECT') return [];
+      return [...el.options].map(o => ({ handle: register(o), id: o.id || '',
+        label: clean(o.text), value: o.value, index: o.index,
+        disabled: o.matches(':disabled'), selected: o.selected }));
+    },
+
+    nativeSelect(handle, value, selector = null) {
       const el = get(handle);
       if (!el || el.tagName !== 'SELECT') return { ok: false, why: 'not-select' };
-      const option = [...el.options].find(o => clean(o.text) === clean(value) || o.value === value);
-      if (!option) return { ok: false, why: 'no-option',
-                            available: [...el.options].map(o => clean(o.text)).slice(0, 40) };
-      el.value = option.value;
+      const all = [...el.options];
+      const want = clean(String(value));
+      let hits = all.filter(o => clean(o.text) === want || o.value === want);
+      if (selector !== null) {
+        let chosen;
+        try { chosen = [...el.querySelectorAll(selector)]; }
+        catch (e) { return { ok: false, why: 'invalid-option-choice', candidates: api.nativeOptions(handle) }; }
+        if (chosen.length !== 1 || !hits.includes(chosen[0]))
+          return { ok: false, why: 'invalid-option-choice', candidates: api.nativeOptions(handle) };
+        hits = chosen;
+      }
+      if (hits.length > 1) return { ok: false, why: 'ambiguous-option', candidates: api.nativeOptions(handle) };
+      if (!hits.length) return { ok: false, why: 'no-option', available: all.map(o => clean(o.text)) };
+      const option = hits[0];
+      if (option.matches(':disabled')) return { ok: false, why: 'disabled-option' };
+      const index = option.index, actualValue = option.value, label = clean(option.text);
+      el.selectedIndex = index;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: clean(el.options[el.selectedIndex].text) === clean(option.text) };
+      const ok = el.selectedIndex === index && el.value === actualValue
+        && clean(el.options[el.selectedIndex] && el.options[el.selectedIndex].text) === label;
+      return { ok, why: ok ? null : 'native-readback-mismatch', attempted: true,
+               value: actualValue, label, index };
     },
 
     // 三层回读。模型层（React fiber / Vue）只作参考，不单独否决：
@@ -1122,7 +1195,8 @@
           }
         }
       }
-      return { dom, display, model: api.modelValue(handle) };
+      return { dom, display, model: api.modelValue(handle),
+               selected_index: el.tagName === 'SELECT' ? el.selectedIndex : null };
     },
 
     modelValue(handle) {

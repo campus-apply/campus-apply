@@ -95,14 +95,17 @@ def test_appeared_reports_evidence_and_does_not_decide():
 
 
 def test_the_decision_is_one_place_and_can_say_it_cannot_tell():
-    """挑面板的判据只有一处，而且允许它回答"分不出来"。"""
-    code = py_code()
-    assert 'def _pick_panel' in code, '挑面板要有一个单独的地方，不散在各个调用点'
-    body = code[code.index('def _pick_panel'):]
-    body = body[:body.index('\ndef ')]
-    assert "'ambiguous'" in body, '分不出来要能说出来，不能硬挑一个'
-    assert "optionCount" in body and "floating" in body, \
-        '够像的门槛是"有可点选项 + 是浮层"，两条都要'
+    """浮层和大分差都不能代替唯一性；原源码门槛断言已被AGENTS纠正。"""
+    import importlib.util
+    source = HERE.parent / 'skills/campus-apply/scripts/browser/chrome_cdp.py'
+    spec = importlib.util.spec_from_file_location('choice_verdict', source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rows = [dict(handle=1, optionCount=2, floating=False, score=20),
+            dict(handle=2, optionCount=2, floating=True, score=2)]
+    chosen, why, candidates = module._pick_panel(rows)
+    assert chosen is None and why == 'ambiguous'
+    assert len(candidates) == 2
 
 
 def test_an_unsure_field_does_not_stop_the_whole_page():

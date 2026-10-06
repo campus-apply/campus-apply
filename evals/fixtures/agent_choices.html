@@ -1,0 +1,40 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>虚构网申：agent 判断与显式选择</title>
+<style>
+body{font:16px/1.6 system-ui;padding:28px;color:#222}input{width:220px;height:36px}
+.pick{display:block;padding:6px 12px;min-width:180px;min-height:28px;cursor:pointer}
+[data-test-panel]{border:1px solid #bbb;background:white;padding:8px;box-shadow:0 3px 12px #0002}
+</style>
+<h1>虚构网申测试页</h1>
+<p>本页只验证观察、歧义交接和指定目标；材料与行为均为虚构。</p>
+<label for="field">学历</label><input id="field" readonly>
+<script>
+(() => {
+const params=new URLSearchParams(location.search), mode=params.get('mode')||'many';
+const field=document.getElementById('field');
+const truth={value:'',node:null}, audit={opened:0,clicked:[],saved:0,submitted:0};
+field.onclick=()=>{
+  const old=[...document.querySelectorAll('[data-test-panel]')];
+  if(old.length){old.forEach(p=>p.remove());return;}
+  audit.opened++;
+  const count=mode==='many'?6:1;
+  for(let i=0;i<count;i++){
+    const panel=document.createElement('div');panel.id='p'+i;panel.dataset.testPanel='1';
+    panel.className=i===0?'panel':'plain';
+    panel.style=mode==='inline'?'width:210px;margin-top:12px':
+      'position:absolute;left:'+(25+i*180)+'px;top:220px;min-width:155px';
+    for(let j=0;j<2;j++){
+      const option=document.createElement('span');option.id='p'+i+'o'+j;
+      option.className='pick'+(j===0?' option':'');
+      option.textContent=mode==='duplicate'?'同名项':(j===0?'本科':'硕士');
+      option.onclick=e=>{
+        e.stopPropagation();audit.clicked.push(option.id);truth.node=option.id;
+        truth.value=option.textContent;field.value=option.textContent;
+        document.querySelectorAll('[data-test-panel]').forEach(p=>p.remove());
+      };panel.append(option);
+    }document.body.append(panel);
+  }
+};
+window.fixtureTruth=()=>({...truth});
+window.fixtureAudit=()=>({...audit,clicked:[...audit.clicked],openPanels:document.querySelectorAll('[data-test-panel]').length});
+})();
+</script></html>

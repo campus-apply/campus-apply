@@ -778,7 +778,7 @@ def _panel_candidates(tab, handle, budget):
     expr = 'window.__caFill.appeared(%d)' % handle
     ok, found = _wait_for(
         tab, expr,
-        lambda v: bool(v) and any(c.get('optionCount') and c.get('floating') for c in v),
+        lambda v: bool(v) and any(c.get('optionCount') for c in v),
         budget)
     return found or []
 
@@ -810,34 +810,86 @@ def _fill_lib():
 
 
 def _pick_panel(candidates):
-    """从候选里挑出唯一那个够像面板的。挑不出就不挑——返回 (None, 原因, 够像的那几个)。
+    """只有唯一有选项证据的候选才自动走，评分/浮层不决定身份。
 
-    "够像"= 里面有可点的选项（optionCount > 0）且是浮层（floating）。这两条合起来描述的是
-    面板本身：一层浮在页面上方、装着一排能点的东西。字段容器里也有带文字的叶子（标签 +
-    校验提示），但它在文档流里；控件壳是浮层的一部分却没有可点的选项；两者都过不了这道门，
-    而不必为它们各写一条淘汰规则。
+    完整观察数据仍交给agent；零证据表示未观察到，不证明页面不存在面板。
     """
-    likely = [c for c in candidates if c.get('optionCount') and c.get('floating')]
+    likely = [c for c in candidates if c.get('optionCount')]
     if not likely:
         return None, 'none', []
-    if len(likely) > 1 and likely[0]['score'] - likely[1]['score'] < 2:
+    if len(likely) > 1:
         # 分数咬得很近，说明代码确实分不出来。这时猜一个的代价是悄悄操作错东西。
         return None, 'ambiguous', likely
     return likely[0], 'ok', likely
 
 
-def _panel_for(tab, handle, budget, note=True):
-    """挑定这次点击开出来的面板；挑不出返回 None。歧义要看证据的场合用上面两个函数。
-
-    note=False 时只看不记账：级联的第 2 级要先问一句"有没有新面板"，而这一问不该在账本上
-    留痕——答案是"没有"的时候，记进去的那个候选（选中态变色的选项格子之类）再也销不掉。
-    """
-    panel, _why, _likely = _pick_panel(_panel_candidates(tab, handle, budget))
-    if panel is None:
-        return None
+def _panel_for(tab, handle, budget, note=True, selector=None):
+    """返回选定对象、原因和完整候选；显式selector每次在当前DOM中唯一解析。"""
+    candidates = _panel_candidates(tab, handle, budget)
+    panel, why, _likely = _pick_panel(candidates)
+    if selector is not None:
+        picked = _fill_call(tab, 'window.__caFill.panelChoice(%s)' % json.dumps(selector))
+        if not picked or picked.get('error'):
+            panel, why = None, 'invalid-choice'
+        else:
+            panel, why = picked, 'ok'
     if note:
-        _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
-    return panel
+        noted = [panel] if panel else [c for c in candidates if c.get('optionCount')]
+        _fill_call(tab, 'window.__caFill.noteCandidates(%d, %s)' %
+                   (handle, json.dumps([c['handle'] for c in noted])))
+    return dict(panel=panel, reason=why, candidates=candidates)
+
+
+def _candidate_evidence(tab, candidates):
+    """完整观察数据落JSON，终端摘要可以精简，不能替agent删候选。"""
+    out = []
+    for candidate in candidates:
+        row = dict(candidate)
+        try:
+            row['options'] = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % row['handle']) or []
+            row['option_nodes'] = _fill_call(tab, 'window.__caFill.optionEvidence(%d)' % row['handle']) or []
+        except TabError as error:
+            row['observation_error'] = str(error)
+        out.append(row)
+    return out
+
+
+def _choice_at(item, family, depth, step_count):
+    """选择只来自agent声明；null表示唯一候选路径，不表示第一项。"""
+    single, plural = family + '_selector', family + '_selectors'
+    if single in item and plural in item:
+        raise ValueError(single + ' 与 ' + plural + ' 不能同时出现')
+    if single in item:
+        if step_count != 1 or not isinstance(item[single], str) or not item[single].strip():
+            raise ValueError(single + ' 只用于单步且必须为非空字符串')
+        return item[single]
+    if plural in item:
+        choices = item[plural]
+        if (not isinstance(choices, list) or len(choices) != step_count
+                or any(c is not None and (not isinstance(c, str) or not c.strip()) for c in choices)):
+            raise ValueError(plural + ' 长度须等于选择步数，每项为非空字符串或 null')
+        return choices[depth]
+    return None
+
+
+def _panel_failure(tab, handle, record, reason, candidates, want, display_selector,
+                   kind, budget, learned):
+    record.update(reason=reason, candidates=_candidate_evidence(tab, candidates))
+    if reason == 'no-panel':
+        # 观察器没捕获到不是关闭证明：CSS :focus等也能展开菜单。
+        record.update(closed_by=None, panel_left_open=None, panel_status_unknown=True)
+    else:
+        how, closed = _close_panels(tab, handle, budget, learned)
+        record.update(closed_by=how, panel_left_open=not closed)
+    record['readback'] = _verify(tab, handle, want, display_selector, kind)
+    record['why'] = {
+        'ambiguous-panel': '面板候选不唯一，未自动选定；请主动截图并按证据指定 panel_selector',
+        'invalid-panel-choice': '显式面板选择无匹配或不唯一，未回退猜选',
+        'ambiguous-option': '同名选项不唯一，未自动点击；请主动截图并指定 option_selector',
+        'invalid-option-choice': '显式选项选择无匹配、不唯一或文字不符，未回退猜选',
+        'no-panel': '当前未观察到有选项的面板候选，请查看证据或主动截图',
+    }[reason]
+    return False, record
 
 
 def _panel_still_open(tab, handle):
@@ -925,16 +977,16 @@ def _click_empty_spot(tab, handle):
     **算出来确定没有元素挡着**的坐标，坐标由页内算、点由 CDP 发。
     """
     spot = _fill_call(tab, '''(() => {
-      const panel = window.__caFill.openPanelOf(%d);
-      const pr = panel ? panel.getBoundingClientRect() : null;
+      const panels = window.__caFill.openPanelsOf(%d);
       // 从视口几个位置里挑一个：不在面板上、那里最顶层的元素不是可交互控件
       const tries = [[innerWidth - 12, innerHeight / 2], [12, innerHeight / 2],
                      [innerWidth / 2, 8], [innerWidth - 12, 8]];
       for (const [x, y] of tries) {
-        if (pr && x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom) continue;
+        if (panels.some(panel => { const pr = panel.getBoundingClientRect();
+          return x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom; })) continue;
         const top = document.elementFromPoint(x, y);
         if (top && top.closest('a,button,input,textarea,select,[role="button"]')) continue;
-        if (top && panel && panel.contains(top)) continue;
+        if (top && panels.some(panel => panel.contains(top))) continue;
         return {x: Math.round(x), y: Math.round(y)};
       }
       return null;
@@ -996,7 +1048,7 @@ def _verify(tab, handle, want, display_selector, kind):
     return dict(ok=bool(visible_ok) and not errors, visible_ok=bool(visible_ok),
                 model_found=bool(model.get('found')), model_ok=bool(model_ok),
                 model_via=model.get('via'), dom_len=len(dom) if isinstance(dom, str) else None,
-                display=display, errors=errors)
+                display=display, errors=errors, selected_index=back.get('selected_index'))
 
 
 def _fill_one(tab, item, waits, learned=None):
@@ -1010,6 +1062,10 @@ def _fill_one(tab, item, waits, learned=None):
     want = item.get('value')
     label = item.get('title') or item.get('label') or item.get('key') or selector
     record = dict(key=item.get('key') or label, kind=kind, label=label, status='failed')
+    if want is None or kind == 'cascader' and isinstance(want, list) and not want:
+        record.update(status='not-started', reason='missing-value',
+                      why='计划没有目标值，需要 agent 明确后再执行；未写入')
+        return False, record
     if kind not in FILL_KINDS:
         record['why'] = 'kind 不认识：' + str(kind)
         return False, record
@@ -1084,11 +1140,22 @@ def _fill_one(tab, item, waits, learned=None):
                 return False, record
 
         elif kind == 'native-select':
-            got = _fill_call(tab, 'window.__caFill.nativeSelect(%d, %s)' % (handle, json.dumps(want)))
+            choice = _choice_at(item, 'option', 0, 1)
+            expression = ('window.__caFill.nativeSelect(%d, %s)' % (handle, json.dumps(want))
+                          if choice is None else 'window.__caFill.nativeSelect(%d, %s, %s)' %
+                          (handle, json.dumps(want), json.dumps(choice)))
+            got = _fill_call(tab, expression)
             if not got.get('ok'):
+                record.update(reason=got.get('why'), candidates=got.get('candidates') or [])
+                if got.get('attempted'):
+                    record['performed_steps'] = [dict(action='selected-native-option')]
+                    record['readback'] = _verify(tab, handle, got.get('value', want),
+                                                 item.get('display_selector'), kind)
                 record['why'] = ('没有这个选项，页面上有：' + '、'.join(got.get('available', [])[:12])
                                  if got.get('why') == 'no-option' else '选不上：' + str(got.get('why')))
                 return False, record
+            record['native_option'] = {k:got.get(k) for k in ('value','label','index')}
+            want = got.get('value', want)
 
         elif kind == 'checkbox':
             got = _fill_call(tab, 'window.__caFill.toggle(%d, %s)'
@@ -1099,52 +1166,90 @@ def _fill_one(tab, item, waits, learned=None):
             record['changed'] = got.get('changed')
 
         else:
-            # 面板类：装观察器 → 开面板 → 收新出现的节点 → 选 → 收面板 → 销账
+            # agent给出目标与可选selector；代码只校验和执行，不用排序代选。
             steps = want if kind == 'cascader' and isinstance(want, list) else [want]
-            _fill_call(tab, 'window.__caFill.watchStart()')   # 必须在点击之前
+            record['performed_steps'] = []
+            try:
+                panel_choices = [_choice_at(item, 'panel', i, len(steps)) for i in range(len(steps))]
+                option_choices = [_choice_at(item, 'option', i, len(steps)) for i in range(len(steps))]
+            except ValueError as error:
+                record.update(reason='invalid-plan', why=str(error))
+                return False, record
+            _fill_call(tab, 'window.__caFill.watchStart()')
+            _real_click(tab, handle)
+            record['performed_steps'].append(dict(action='opened-control'))
             if kind == 'search':
-                _real_click(tab, handle)
                 term = item.get('term') or (steps[0] if isinstance(steps[0], str) else '')
                 wrote = _fill_call(tab, 'window.__caFill.write(%d, %s)' % (handle, json.dumps(term)))
                 if not wrote.get('ok'):
                     record['why'] = '搜索词写不进：' + wrote.get('why', '未知')
+                    record['panel_status_unknown'] = True
+                    record['readback'] = _verify(tab, handle, item.get('display', want),
+                                                 item.get('display_selector'), kind)
                     return False, record
-            else:
-                _real_click(tab, handle)
-            panel = _panel_for(tab, handle, waits['panel'])
+                record['performed_steps'].append(dict(action='typed-term'))
+            decision = _panel_for(tab, handle, waits['panel'], selector=panel_choices[0])
+            panel = decision['panel']
             if panel is None:
-                record['why'] = f"点了之后 {waits['panel']:g} 秒内没出现面板"
-                return False, record
-            record['panel'] = panel['cls'][:40]
+                reason = {'ambiguous':'ambiguous-panel', 'invalid-choice':'invalid-panel-choice'}.get(
+                    decision['reason'], 'no-panel')
+                return _panel_failure(tab, handle, record, reason, decision['candidates'],
+                    item.get('display', want), item.get('display_selector'), kind, waits['panel'], learned)
+            record['panel'] = panel.get('cls', '')[:40]
             for depth, step in enumerate(steps):
-                # 级联每点一级，下一级可能才渲染出来，所以每级都重新等选项
-                ok, got = _wait_for(
-                    tab, 'window.__caFill.option(%d, %s, true)' % (panel['handle'], json.dumps(step)),
-                    lambda v: bool(v and v.get('handle')), waits['option'])
+                if option_choices[depth] is not None:
+                    expression = 'window.__caFill.optionChoice(%d, %s, %s)' % (
+                        panel['handle'], json.dumps(step), json.dumps(option_choices[depth]))
+                else:
+                    expression = 'window.__caFill.option(%d, %s, true)' % (panel['handle'], json.dumps(step))
+                ok, got = _wait_for(tab, expression,
+                    lambda v: bool(v and (v.get('handle') or v.get('error') in
+                        ('ambiguous-option','invalid-option-choice','invalid-selector'))), waits['option'])
+                if got and got.get('error') in ('ambiguous-option','invalid-option-choice','invalid-selector'):
+                    reason = ('ambiguous-option' if got['error']=='ambiguous-option'
+                              else 'invalid-option-choice')
+                    # 选项候选不是面板，不能再调用optionsIn解释它们。
+                    option_candidates = got.get('candidates') or []
+                    failed, rec = _panel_failure(tab, handle, record, reason, [],
+                        item.get('display', want), item.get('display_selector'), kind, waits['panel'], learned)
+                    rec['candidates'] = option_candidates
+                    rec['selection_depth'] = depth
+                    return failed, rec
                 if not ok:
                     available = (got or {}).get('available', [])
                     record['why'] = (f'第 {depth + 1} 级没有「{step}」'
                                      + ('，面板里有：' + '、'.join(available[:12]) if available else ''))
-                    _close_panels(tab, handle, waits['panel'], learned)
+                    how, closed = _close_panels(tab, handle, waits['panel'], learned)
+                    record.update(closed_by=how, panel_left_open=not closed)
+                    record['readback'] = _verify(tab, handle, item.get('display', want),
+                                                 item.get('display_selector'), kind)
                     return False, record
+                _fill_call(tab, 'window.__caFill.watchStart()')
                 _real_click(tab, got['handle'])
-                # 级联的下一级可能新开一个面板（省级菜单换成市级），也可能就在当前面板里
-                # 并排着（年份一列、月份一格，两级同时在）。所以"点完之后出现了新节点"不足以
-                # 换面板——选中态变色也会让节点出现在候选里，换过去就等于把搜索范围缩到一个
-                # 格子里，第 2 级怎么找都找不到（实测报"第 2 级没有「9月」"且面板里一个选项都列不出）。
-                # 判据改成：新面板必须真的含有下一级要点的那一项，否则继续用当前这个。
+                record['performed_steps'].append(dict(action='clicked-option', depth=depth,
+                                                      handle=got['handle']))
                 if depth + 1 < len(steps):
-                    nxt = _panel_for(tab, handle, waits['panel'], note=False)
+                    decision = _panel_for(tab, handle, waits['panel'], note=False,
+                                          selector=panel_choices[depth + 1])
+                    nxt = decision['panel']
+                    if decision['reason'] in ('ambiguous','invalid-choice'):
+                        _fill_call(tab, 'window.__caFill.noteCandidates(%d, %s)' %
+                            (handle, json.dumps([c['handle'] for c in decision['candidates']
+                                                 if c.get('optionCount')])))
+                        reason = ('ambiguous-panel' if decision['reason']=='ambiguous'
+                                  else 'invalid-panel-choice')
+                        return _panel_failure(tab, handle, record, reason, decision['candidates'],
+                            item.get('display', want), item.get('display_selector'), kind, waits['panel'], learned)
                     if nxt:
-                        probe = _fill_call(
-                            tab, 'window.__caFill.option(%d, %s, true)'
-                            % (nxt['handle'], json.dumps(steps[depth + 1])))
-                        if probe and probe.get('handle'):
+                        probe = _fill_call(tab, 'window.__caFill.option(%d, %s, true)' %
+                                           (nxt['handle'], json.dumps(steps[depth + 1])))
+                        if panel_choices[depth + 1] is not None or probe and (probe.get('handle') or
+                                probe.get('error')=='ambiguous-option'):
                             panel = nxt
-                            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)'
-                                       % (handle, panel['handle']))
+                            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' % (handle, panel['handle']))
             how, closed = _close_panels(tab, handle, waits['panel'], learned)
             record['closed_by'] = how
+            record['panel_left_open'] = not closed
             record['panel_left_open'] = not closed
             # 面板收不掉**不等于**值没写进去：上面已经点中了选项，值多半已经落地。
             # 原来这里直接 return False 跳过回读，于是报告说"没动它"而页面上有值——
@@ -1156,10 +1261,15 @@ def _fill_one(tab, item, waits, learned=None):
 
     except TabError as e:
         record['why'] = str(e)
+        if record.get('performed_steps'):
+            record['panel_status_unknown'] = True
         return False, record
 
     check = _verify(tab, handle, want, item.get('display_selector'), kind)
     record['readback'] = check
+    expected_index = (record.get('native_option') or {}).get('index')
+    if expected_index is not None and check.get('selected_index') != expected_index:
+        check['ok'] = False
     if not check['ok']:
         record['why'] = ('回读不一致：显示/DOM 读到 '
                          + repr(check['display'] if kind != 'text' else check['dom_len'])
@@ -1212,6 +1322,16 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
         return 2
     if not all(isinstance(item, dict) for item in items):
         print('ERR_PLAN: fields 里每一项都要是对象')
+        return 2
+    try:
+        for item in items:
+            value = item.get('value')
+            steps = value if item.get('kind') == 'cascader' and isinstance(value, list) else [value]
+            for depth in range(len(steps)):
+                _choice_at(item, 'panel', depth, len(steps))
+                _choice_at(item, 'option', depth, len(steps))
+    except ValueError as error:
+        print(f'ERR_PLAN: {error}，尚未执行任何字段')
         return 2
     # 位置坐标默认不许用：index 写错一位就操作到完全无关的控件，而最敏感的字段往往恰好
     # 排在最前面。要用得显式开——计划里写 "addressing": "selector"，或者命令行加
@@ -1286,7 +1406,7 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
             print(f'ERR_JS: 注入填写库失败：{err}')
             return 1
         records, filled, learned = [], 0, None
-        for item in items:
+        for index, item in enumerate(items):
             if time.monotonic() >= deadline:
                 records.append(dict(key=item.get('key') or item.get('selector'), status='not-started',
                                     why=f'到了 {max_seconds:g} 秒预算，这个字段没开始'))
@@ -1301,6 +1421,12 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
                 learned = record['closed_by']
             records.append(record)
             filled += 1 if ok else 0
+            if record.get('panel_left_open') or record.get('panel_status_unknown'):
+                records.extend(dict(key=later.get('key') or later.get('label') or later.get('selector'),
+                                    status='not-started',
+                                    why='先确认前一字段的面板状态，再执行剩余计划')
+                               for later in items[index + 1:])
+                break
             time.sleep(random.uniform(lo, hi))              # 字段间留间隔，节奏照 skill 的两档规矩
         # 收尾的只读检查不能把账本烧掉：页面在填写期间导航过的话 window.__caFill 随旧文档消失，
         # 这一行会抛异常。先把逐字段报告打出去，再报告上下文丢了。
@@ -1380,24 +1506,10 @@ def cmd_plan_skeleton(out_path, skip_ok=None, from_options=None):
                                             kind=r.get('kind'),
                                             revealed=r.get('revealed') or [])
                 continue
-            # kind=unsure 的字段：代码没挑出哪个是面板，但每个候选的**完整选项表**
-            # 都读出来了（见 probe-options 的 ambiguous 分支）。这里把它接上——
-            # 不接的话 unsure 这条出口就是死路：agent 看完证据判断出来了，
-            # 下游却不收货，只能再跑一次 --only，而再跑照样 unsure。
-            #
-            # **代码在这里不做判断**：只有当几个候选的选项表**完全一样**时才用它，
-            # 那说明是同一个面板被 MutationObserver 记了多次（新增节点 + 属性变化
-            # 各一条），不存在"挑哪个"的问题。真有分歧（选项表不同）就仍然留空，
-            # 交给 agent 看——那才是需要判断的情况，代码不替它定。
-            cands = r.get('candidates') or []
-            opts = [c.get('options') or [] for c in cands]
-            if opts and all(o for o in opts) and all(o == opts[0] for o in opts):
-                # kind 不写 'unsure'——那说的是"代码认不准哪个是面板"，不是控件类型。
-                # 有选项表就是个要点开挑的控件，kind 留给 plan-skeleton 按 DOM 定。
-                probed[r.get('key')] = dict(options=opts[0],
-                                            kind=None,
-                                            revealed=r.get('revealed') or [],
-                                            from_unsure=True)
+            if r.get('candidates'):
+                # 文本相同不证明是同一节点；证据原样交回，选择由agent补。
+                probed[r.get('key')] = dict(candidates=r['candidates'], kind=None,
+                                            options=None, revealed=r.get('revealed') or [])
 
     def go(tab):
         lib = _fill_lib()
@@ -1429,9 +1541,16 @@ def cmd_plan_skeleton(out_path, skip_ok=None, from_options=None):
             if hit:
                 # 探过的字段：带上选项表和来源。kind 也按探测结果校正——探到选项说明它是
                 # 面板类控件，骨架按 DOM 属性猜的 text 是错的。
-                item['kind'] = hit['kind'] or item['kind']
-                item['options'] = hit['options']
                 item['options_from'] = probed_at
+                if hit.get('candidates'):
+                    item.update(kind=None, candidates=hit['candidates'], agent_decision_required=True,
+                                note='根据当前证据指定kind/panel_selector，所选候选的选项表写入options')
+                else:
+                    item['kind_hint'] = hit.get('kind')
+                    item['kind'] = 'native-select' if f['tag'] == 'select' else None
+                    item['options'] = hit['options']
+                    if item['kind'] is None:
+                        item['agent_decision_required'] = True
             fields.append(item)
         plan = dict(source=outline['url'], fields=fields)
         if from_options:
@@ -1668,11 +1787,10 @@ def cmd_probe_options(out_path, only=None):
                                               labels=f.get('labels'))))
                 continue
             if f['tag'] == 'select':                         # 原生 select 不用点开
-                got = _fill_call(tab, 'window.__caFill.nativeSelect(%d, %s)'
-                                 % (f['handle'], json.dumps('\u0000')))
-                opts = (got or {}).get('available') or []
+                native_options = _fill_call(tab, 'window.__caFill.nativeOptions(%d)' % f['handle']) or []
+                opts = [o['label'] for o in native_options]
                 out.append(dict(key=key, label=f['label'], kind='native-select',
-                                options=opts, count=len(opts)))
+                                options=opts, native_options=native_options, count=len(opts)))
                 continue
             if f['valueLen']:
                 out.append(dict(key=key, label=f['label'], skipped='这个字段已经有值，没有去点它'))
@@ -1706,70 +1824,23 @@ def cmd_probe_options(out_path, only=None):
             # 就倒回"反复请示"的老毛病了。待定项攒着，探完一起交给 agent 看（必要时截图）。
             candidates = _panel_candidates(tab, f['handle'], 2.0)
             panel, why, likely = _pick_panel(candidates)
-            if panel is None and why == 'ambiguous':
-                # 认不准哪个是面板**不等于读不到里面有什么**。面板这会儿还开着，
-                # 先把每个候选的完整选项表读出来，再收面板——原来是先收后报，
-                # 于是 agent 只拿到 sampleTexts 的前四项，想用也没法用，
-                # 只能再跑一次 --only，而再跑一次照样 ambiguous，死循环。
-                #
-                # 读完整选项不是在替 agent 下结论：候选还是原样交出去、一条都不淘汰，
-                # 只是每条都带上"它里面到底有哪些选项"。真站上两条候选常常是同一个面板
-                # 被 MutationObserver 记了两次（新增节点 + 属性变化各一条），选项表
-                # 一模一样——这个事实本身就够 agent 判断了，比我们再加一条判据可靠。
-                for c in likely[:4]:
-                    try:
-                        c['options'] = _fill_call(
-                            tab, 'window.__caFill.optionsIn(%d)' % c['handle']) or []
-                    except TabError:
-                        c['options'] = []
-                # 认不准哪个是面板，但**它确实开着**——候选的选项表就是证据。
-                # 所以收面板之前先把这些选项文字告诉页内，让它据此判断收干净了没有。
-                # 不这么做的话：没 noteOpen 过 → 账本里没有 → _close_panels 第一步
-                # 查账本查不到 → 直接报 already-closed，一招都没试 → 面板留在页面上，
-                # 下一轮探测整个失真（2026-10-06 阿里实测：账本说 0、页面上还开着 178px）。
-                #
-                # 判据不依赖结构：面板存在的意义是让选项可见，所以"这些文字还看得见吗"
-                # 就是"面板还开着吗"。面板挂哪儿、分几层、什么 class 都不影响它成立。
-                seen_opts = next((c.get('options') for c in likely if c.get('options')), None)
-                if seen_opts:
-                    _fill_call(tab, 'window.__caFill.notePanelTexts(%d, %s)'
-                               % (f['handle'], json.dumps(seen_opts[:8], ensure_ascii=False)))
-                _close_panels(tab, f['handle'], 2.0, learned)
-                out.append(dict(key=key, label=f['label'], kind='unsure',
-                                note='认不准哪个是面板，没动它。候选连选项表见 candidates——'
-                                     '几条候选的 options 完全一样就是同一个面板被记了多次，'
-                                     '挑一条的 options 直接写进计划即可；真分不清就截图看',
-                                candidates=[dict(handle=c['handle'], cls=c['cls'],
-                                                 score=c['score'],
-                                                 optionCount=c['optionCount'],
-                                                 floating=c['floating'],
-                                                 gapBelow=c['gapBelow'],
-                                                 sampleTexts=c['sampleTexts'],
-                                                 options=c.get('options') or [])
-                                            for c in likely[:4]]))
-                unsure += 1
-                continue
             if panel is None:
-                # 挑不出来的时候**把候选连判据一起吐出来，一条都不淘汰**。
-                # 绝大多数情况这里确实是普通文本框（candidates 为空），报一句就够；
-                # 但点出了东西却没有一个够像时，判据各自是什么值才是唯一能定位的证据——
-                # 2026-10-06 真站上 27 个控件全探不到选项，就是因为这一支把证据丢了。
-                row = dict(key=key, label=f['label'], kind='text?',
-                           note='点了没出现面板，多半是普通文本框')
-                if candidates:
-                    row['note'] = ('点出了 %d 个候选，但没有一个同时满足'
-                                   '"有可点选项"和"是浮层"；候选连判据见 candidates'
-                                   % len(candidates))
-                    row['candidates'] = [dict(cls=c.get('cls'), score=c.get('score'),
-                                              optionCount=c.get('optionCount'),
-                                              floating=c.get('floating'),
-                                              gapBelow=c.get('gapBelow'),
-                                              sampleTexts=c.get('sampleTexts'))
-                                         for c in candidates[:6]]
+                evidence = _candidate_evidence(tab, candidates)
+                _fill_call(tab, 'window.__caFill.noteCandidates(%d, %s)' %
+                    (f['handle'], json.dumps([c['handle'] for c in likely])))
+                how, closed = _close_panels(tab, f['handle'], 2.0, learned)
+                row = dict(key=key, label=f['label'], kind='unsure' if candidates else 'text?',
+                           note='当前不能自动选定面板；完整候选见 candidates。'
+                                '看不清就主动截图，由 agent 指定目标，不按文字表相等合并身份。',
+                           candidates=evidence, closed_by=how, closed=closed,
+                           actions=['opened-control'])
                 out.append(row)
+                unsure += 1 if candidates else 0
+                if not closed:
+                    break
                 continue
-            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)'
-                       % (f['handle'], panel['handle']))
+            _fill_call(tab, 'window.__caFill.noteOpen(%d, %d)' %
+                       (f['handle'], panel['handle']))
             opts = _fill_call(tab, 'window.__caFill.optionsIn(%d)' % panel['handle']) or []
             # 面板里并排几组选项：两组以上是多级控件（年份一列 + 月份一格），计划要写 cascader。
             # 按结构数，不按 class 猜——猜错了 kind，计划走的就是另一条执行路径。
