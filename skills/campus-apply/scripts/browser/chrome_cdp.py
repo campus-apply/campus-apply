@@ -74,7 +74,7 @@
 输出约定：找不到调试浏览器 ERR_NO_CDP（退出码 2）；没找到标签页 NO_MATCHING_TAB（1）；JS 抛异常 ERR_JS: …（1）。
 返回值是字符串就原样打印，其他类型打成 JSON。
 """
-import base64, io, json, math, os, platform, random, re, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
+import base64, hashlib, io, json, math, os, platform, random, re, shutil, socket, struct, subprocess, sys, time, urllib.request, urllib.error, urllib.parse
 
 from http.client import HTTPConnection, HTTPResponse
 
@@ -783,6 +783,32 @@ def _panel_candidates(tab, handle, budget):
     return found or []
 
 
+def _fill_lib():
+    """读 lib_fill.js，把它的注入版本号换成**按文件内容算出来的指纹**。
+
+    注入守卫是 `if (window.__caFill && window.__caFill.version === VERSION) return;`——
+    同一个标签页里已注入过同版本就不重建（重建会清空 handle 账本，而开新标签页在真实站点上
+    会丢登录态，所以不能靠开新页解决）。问题出在 `VERSION` 要人手维护：**改了判据忘了加一，
+    标签页里跑的就一直是旧代码，而测试红绿看不出任何变化**。
+    2026-10-06 实测踩到：`bestLabel` 已经改对，却连续两次量到"改前改后一模一样"，
+    差点据此推翻一个正确的修法；查到最后才发现跑的是缓存里的旧 lib。
+    文件开头的注释早写着"改了判据就加一"——注释拦不住，所以换成机制。
+
+    内容变了指纹就变，守卫自然放行重建；内容没变指纹也不变，"同一份 lib 连续注入只建一次"
+    这个原本的好处一个不丢。文件里的 `VERSION` 常量保留，它仍是给人读的语义版本号。
+    """
+    with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
+        lib = f.read()
+    stamp = hashlib.sha256(lib.encode('utf-8')).hexdigest()[:12]
+    # 替换的是那个字面量本身，不是"注入后再给 version 追加一段"——后者会让守卫每次都对不上，
+    # 于是每条命令都重建账本，正好砸掉守卫要保护的东西。
+    patched, n = re.subn(r'const VERSION = \d+;',
+                         "const VERSION = '%s';" % stamp, lib, count=1)
+    if not n:                      # 字面量格式变了就退回原样，别静默跑一个没守卫的 lib
+        return lib
+    return patched
+
+
 def _pick_panel(candidates):
     """从候选里挑出唯一那个够像面板的。挑不出就不挑——返回 (None, 原因, 够像的那几个)。
 
@@ -1254,8 +1280,7 @@ def cmd_fill(plan_path, max_seconds=120, allow_selector=False):
     deadline = started + max_seconds
 
     def go(tab):
-        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
-            lib = f.read()
+        lib = _fill_lib()
         _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')
@@ -1375,8 +1400,7 @@ def cmd_plan_skeleton(out_path, skip_ok=None, from_options=None):
                                             from_unsure=True)
 
     def go(tab):
-        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
-            lib = f.read()
+        lib = _fill_lib()
         _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')
@@ -1471,8 +1495,7 @@ def cmd_survey(out_path):
     只读：不点击、不写入、不开面板。会开面板的那部分在 probe-options。
     """
     def go(tab):
-        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
-            lib = f.read()
+        lib = _fill_lib()
         _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')
@@ -1589,8 +1612,7 @@ def cmd_probe_options(out_path, only=None):
     wanted = [k.strip() for k in (only or '').split(',') if k.strip()]
 
     def go(tab):
-        with open(os.path.join(HERE, 'lib_fill.js'), encoding='utf-8') as f:
-            lib = f.read()
+        lib = _fill_lib()
         _, err = tab.evaluate(lib + '\n; !!window.__caFill', await_promise=False)
         if err:
             print(f'ERR_JS: 注入填写库失败：{err}')

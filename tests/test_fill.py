@@ -202,3 +202,55 @@ def test_fill_never_presses_submit():
     fill_section = source[source.index('FILL_KINDS = '):source.index('def cmd_plan_skeleton')]
     code = '\n'.join(l.split('#')[0] for l in fill_section.splitlines())
     assert 'submit' not in code.lower(), 'fill must not touch submit controls'
+
+
+# ── 注入守卫的版本号必须跟着文件内容走，不靠人记（待处理 156）────────────────────
+#
+# 守卫是 `if (window.__caFill && window.__caFill.version === VERSION) return;`：同一个
+# 标签页里已注入过同版本就不重建（重建会清空 handle 账本，而开新标签页在真实站点上会丢
+# 登录态）。原来 VERSION 是个手写的整数，于是**改了判据忘了加一，标签页里跑的就一直是
+# 旧代码，而测试红绿看不出任何变化**——2026-10-06 实测连续两次量到"改前改后一模一样"，
+# 差点据此推翻一个已经改对的修法。文件开头的注释早写着"改了判据就加一"，注释拦不住。
+
+def _fill_lib():
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        import chrome_cdp
+        return chrome_cdp._fill_lib()
+    finally:
+        sys.path.pop(0)
+
+
+def test_injected_version_tracks_file_content():
+    """注入的 lib 里，VERSION 必须是按文件内容算出来的指纹，不是文件里那个手写整数。"""
+    import re
+    injected = _fill_lib()
+    m = re.search(r"const VERSION = (.+?);", injected)
+    assert m, '注入的 lib 里找不到 VERSION 那一行'
+    value = m.group(1)
+    assert value.startswith("'") and value.endswith("'"), \
+        'VERSION 应当被换成带引号的内容指纹，实际是 ' + value
+    assert len(value.strip("'")) >= 8, '指纹太短，撞车风险太大：' + value
+
+
+def test_same_file_gives_same_fingerprint():
+    """同一份文件连续读两次指纹相同——守卫原本的用处（连续注入只建一次）不能丢。"""
+    assert _fill_lib() == _fill_lib()
+
+
+def test_changed_content_changes_fingerprint(tmp_path):
+    """文件内容一改指纹就变，哪怕没人去动 VERSION 那个整数。"""
+    import re
+    import shutil
+    lib_path = SCRIPT.parent / 'lib_fill.js'
+    backup = tmp_path / 'lib_fill.js.bak'
+    shutil.copy(lib_path, backup)
+    before = re.search(r"const VERSION = (.+?);", _fill_lib()).group(1)
+    try:
+        text = lib_path.read_text(encoding='utf-8')
+        # 只加一行注释，**不动 VERSION**
+        lib_path.write_text(text + '\n// 156 的回归测试加的一行\n', encoding='utf-8')
+        after = re.search(r"const VERSION = (.+?);", _fill_lib()).group(1)
+    finally:
+        shutil.copy(backup, lib_path)
+    assert before != after, '文件内容变了但注入的 VERSION 没变——守卫会拦掉新代码'
